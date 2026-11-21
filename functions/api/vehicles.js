@@ -20,7 +20,7 @@ async function staff(request,env){
  return await crypto.subtle.verify("RSASSA-PKCS1-v1_5",key,sig,new TextEncoder().encode(parts[0]+"."+parts[1]));
  }catch{return false}
 }
-const allowed=["title","registration","make","model","year","mileage","price","previousPrice","offerPrice","offerExpiry","doors","colour","bodyType","engine","seats","featured","fuel","gearbox","status","youtube","photo","photos","description","offer","vatStatus","priceIncludesVat","motExpiry","roadTax","keys","serviceHistory","dealItems"];
+const allowed=["title","registration","make","model","year","mileage","price","previousPrice","offerPrice","offerExpiry","doors","colour","bodyType","engine","seats","featured","fuel","gearbox","status","youtube","photo","photos","description","offer","vatStatus","priceIncludesVat","motExpiry","roadTax","keys","serviceHistory","previousKeepers","timingWork","lastService","lastWork","dealItems"];
 async function schema(db){const rows=await db.prepare("PRAGMA table_info(vehicles)").all();const names=new Set((rows.results||[]).map(x=>x.name));for(const [name,type] of [["title","TEXT"],["extra_json","TEXT"]])if(!names.has(name))await db.prepare("ALTER TABLE vehicles ADD COLUMN "+name+" "+type).run()}
 const columns={title:"model",registration:"registration",make:"make",model:"model",year:"year",mileage:"mileage",price:"retail_price",fuel:"fuel_type",gearbox:"transmission",status:"status",colour:"colour",bodyType:"body_type",engine:"engine_size",youtube:"youtube_url",photo:"main_image_url",description:"description",featured:"featured"};
 const toRow=x=>{let y={...x};for(let [a,b] of Object.entries(columns)){if(x[b]!==undefined)y[a]=x[b]}if(x.extra_json){try{Object.assign(y,JSON.parse(x.extra_json))}catch{}}y.id=x.id;return y};
@@ -32,7 +32,7 @@ export async function onRequestGet({request,env}){
  await schema(env.DB);
  const sql=isAdmin?"SELECT * FROM vehicles ORDER BY updated_at DESC LIMIT 500":"SELECT * FROM vehicles WHERE status='published' ORDER BY featured DESC,updated_at DESC LIMIT 100";
  const result=await env.DB.prepare(sql).all();
- return json({vehicles:(result.results||[]).map(x=>{const v=toRow(x);if(isAdmin)return v;return {id:v.id,title:v.title,make:v.make,model:v.model,year:v.year,mileage:v.mileage,price:v.price,fuel:v.fuel,gearbox:v.gearbox,description:v.description,photo:v.photo,youtube:v.youtube,featured:v.featured,status:v.status,vatStatus:v.vatStatus,priceIncludesVat:v.priceIncludesVat!=='false',motExpiry:v.motExpiry,roadTax:v.roadTax,keys:v.keys,serviceHistory:v.serviceHistory,photos:v.photos,offerPrice:v.offerPrice,previousPrice:v.previousPrice,offerExpiry:v.offerExpiry,dealItems:v.dealItems}})});
+ return json({vehicles:(result.results||[]).map(x=>{const v=toRow(x);if(isAdmin)return v;return {id:v.id,title:v.title,make:v.make,model:v.model,year:v.year,mileage:v.mileage,price:v.price,fuel:v.fuel,gearbox:v.gearbox,description:v.description,photo:v.photo,youtube:v.youtube,featured:v.featured,status:v.status,vatStatus:v.vatStatus,priceIncludesVat:v.priceIncludesVat!=='false',motExpiry:v.motExpiry,roadTax:v.roadTax,keys:v.keys,serviceHistory:v.serviceHistory,previousKeepers:v.previousKeepers,timingWork:v.timingWork,lastService:v.lastService,lastWork:v.lastWork,photos:v.photos,offerPrice:v.offerPrice,previousPrice:v.previousPrice,offerExpiry:v.offerExpiry,dealItems:v.dealItems}})});
  }catch(e){return json({error:"Database query failed",detail:String(e.message||e).slice(0,140)},500)}
 }
 export async function onRequestPost({request,env}){
@@ -42,7 +42,7 @@ export async function onRequestPost({request,env}){
  if(!data||typeof data!=="object")return json({error:"Invalid record"},400);
  const id=typeof data.id==="string"&&/^vehicle_[a-zA-Z0-9_-]{4,90}$/.test(data.id)?data.id:"vehicle_"+crypto.randomUUID();
  const title=String(data.title||"").trim().slice(0,130),make=String(data.make||"").trim().slice(0,50),model=String(data.model||"").trim().slice(0,80);
- if(!title||!make||!model)return json({error:"Title, make and model are required"},400);
+ if(!title||!make||!model||!String(data.registration||'').trim()||!Number(data.year)||Number(data.mileage)<0||!Number.isFinite(Number(data.mileage))||!Number(data.price)||!data.fuel||!data.gearbox||!data.engine)return json({error:"Complete all mandatory vehicle fields"},400);if(Number(data.year)<1950||Number(data.year)>new Date().getUTCFullYear()+1)return json({error:"Invalid vehicle year"},400);
  const status=["draft","ready","published","reserved","sold"].includes(data.status)?data.status:"draft";
  const url=v=>{if(!v)return "";try{const u=new URL(v);return u.protocol==="https:"?u.href:""}catch{return ""}};
  if(data.photo&&!url(data.photo))return json({error:"Photo must be an HTTPS URL"},400);
