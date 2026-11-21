@@ -1,6 +1,8 @@
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"}});
 async function staff(request,env){
- const token=request.headers.get("Cf-Access-Jwt-Assertion");
+ const cookie=request.headers.get("Cookie")||"";
+ const accessCookie=cookie.split(";").map(x=>x.trim()).find(x=>x.startsWith("CF_Authorization="));
+ const token=request.headers.get("Cf-Access-Jwt-Assertion")||(accessCookie?decodeURIComponent(accessCookie.slice("CF_Authorization=".length)):"");
  if(!token||!env.ACCESS_TEAM_DOMAIN||!env.ACCESS_AUD)return false;
  try{
  const parts=token.split(".");if(parts.length!==3)return false;
