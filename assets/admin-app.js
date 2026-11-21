@@ -1,6 +1,6 @@
 (()=>{'use strict';
 const $=id=>document.getElementById(id),KEY='priceless_vehicle_drafts_v1';
-const fields=['title','registration','make','model','year','mileage','price','previousPrice','offerPrice','offerExpiry','doors','colour','bodyType','engine','seats','featured','fuel','gearbox','status','youtube','photo','photos','description','offer','vatStatus','priceIncludesVat','motExpiry','roadTax','keys','serviceHistory','dealItems'];
+const fields=['title','registration','make','model','year','mileage','price','previousPrice','offerPrice','offerExpiry','doors','colour','bodyType','engine','seats','featured','fuel','gearbox','status','youtube','photo','photos','description','offer','vatStatus','priceIncludesVat','motExpiry','roadTax','keys','serviceHistory','previousKeepers','timingWork','lastService','lastWork','dealItems'];
 let records=[],editing=null,online=false;let dealItems=[];
 const node=(tag,cls,txt)=>{let e=document.createElement(tag);if(cls)e.className=cls;if(txt!==undefined)e.textContent=txt;return e};
 const money=n=>new Intl.NumberFormat('en-GB',{style:'currency',currency:'GBP'}).format(Number(n)||0);
@@ -17,34 +17,37 @@ const presets=[
 ['12 Months MOT if less than 6 months remaining','included'],
 ['12 Months AA Breakdown Cover','included'],
 ['3 Months In-House Engine & Gearbox Warranty','included'],
-['Full Service if required','included'],
+['MOT','included'],['Service','included'],['Full Service if required','included'],['Extra MOT','optional'],['Extra Service','optional'],['Paintwork','included'],['Repairs','included'],['Tyres','included'],
 ['Full Valet before collection','included'],
 ['206-Point AA Standard PDI Inspection','included'],
 ['HPI Clear & DVSA Checked','included'],
 ['Fair Part Exchange Valuation','included'],
-['Nationwide Home Delivery','optional'],
+['Nationwide Home Delivery','optional'],['Transport','optional'],
 ['5-Day Temporary Driveaway Insurance','optional'],
 ['Personalised Video Walkaround on request','included'],
 ['Finance options, HP & PCP subject to eligibility','included'],
 ['Extended Warranty 3 Months','optional'],
 ['Extended Warranty 6 Months','optional'],
+['Extended Warranty 9 Months','optional'],
 ['Extended Warranty 12 Months','optional'],
 ['Extended Warranty 24 Months','optional']
 ];
 function dealRow(item={}){const row=node('div','deal-item');row.style.cssText='display:grid;grid-template-columns:minmax(180px,2fr) minmax(120px,1fr) minmax(100px,1fr) auto;gap:9px;margin:10px 0;align-items:end';const field=(label,el)=>{const w=node('label');w.style.cssText='font-size:12px;font-weight:700;display:grid;gap:5px';w.append(document.createTextNode(label),el);return w};const name=node('input');name.placeholder='Benefit name';name.maxLength=160;name.value=item.name||'';const type=node('select');for(const [v,t] of [['included','Included in deal'],['free','FREE promotional'],['charged','Staff-added charge'],['optional','Customer optional']]){let o=node('option','',t);o.value=v;type.append(o)}type.value=item.type||'included';const price=node('input');price.type='number';price.min='0';price.step='.01';price.placeholder='£';price.value=item.price??0;const remove=node('button','btn outline','Remove');remove.type='button';remove.onclick=()=>row.remove();const description=node('textarea');description.placeholder='Conditions, coverage, duration or custom details';description.value=item.description||'';description.rows=2;description.style.cssText='grid-column:1/-1;width:100%';row.append(field('Benefit',name),field('Offer type',type),field('Price (£)',price),remove,description);row._get=()=>({name:name.value.trim(),type:type.value,price:Math.max(0,Number(price.value)||0),description:description.value.trim()});$('dealBuilderRows').append(row)}
-function collectDeals(){return [...$('dealBuilderRows').children].map(x=>x._get()).filter(x=>x.name)}
-function loadDeals(value){$('dealBuilderRows').replaceChildren();let items=[];try{items=Array.isArray(value)?value:JSON.parse(value||'[]')}catch{}if(!Array.isArray(items))items=[];for(const item of items)dealRow(item)}
+function presetRows(value){$('dealPresets').replaceChildren();let items=Array.isArray(value)?value:[];for(const [name,defaultType] of presets){const existing=items.find(x=>x.name===name);const row=node('div','preset-item');const head=node('label');head.style.cssText='display:flex;gap:9px;align-items:center;font-weight:700;font-size:13px';const check=node('input');check.type='checkbox';check.checked=!!existing;head.append(check,document.createTextNode(name));const controls=node('div','preset-controls');const type=node('select');for(const [v,t] of [['included','Included'],['free','FREE'],['charged','Staff charge'],['optional','Customer optional']]){const o=node('option','',t);o.value=v;type.append(o)}type.value=existing?.type||defaultType;const price=node('input');price.type='number';price.min='0';price.step='.01';price.placeholder='Price £';price.value=existing?.price??0;controls.append(type,price);const sync=()=>{controls.style.opacity=check.checked?'1':'.5';type.disabled=price.disabled=!check.checked};check.onchange=sync;sync();row.append(head,controls);row._get=()=>check.checked?{name,type:type.value,price:Math.max(0,Number(price.value)||0),description:existing?.description||''}:null;$('dealPresets').append(row)}}
+function collectDeals(){return [...$('dealPresets').children,...$('dealBuilderRows').children].map(x=>x._get()).filter(x=>x&&x.name)}
+function loadDeals(value){$('dealBuilderRows').replaceChildren();let items=[];try{items=Array.isArray(value)?value:JSON.parse(value||'[]')}catch{}if(!Array.isArray(items))items=[];presetRows(items);for(const item of items.filter(x=>!presets.some(p=>p[0]===x.name)))dealRow(item)}
 $('addDealBenefit').onclick=()=>dealRow();
 function open(id){switchTab('vehicles');editing=id||null;let r=records.find(x=>x.id===id)||{};loadDeals(r.dealItems);for(let f of fields.filter(f=>f!=='dealItems')){if(f==='featured')$(f).checked=!!r[f];else if(f==='status')$(f).value=label(r[f]||'draft');else $(f).value=r[f]??(f==='priceIncludesVat'?'true':'')}$('editorTitle').textContent=id?'Edit Vehicle':'Add Vehicle';$('editor').classList.add('active');$('preview').classList.remove('active');$('editor').scrollIntoView({behavior:'smooth'})}
 function values(){let r={};for(let f of fields.filter(f=>f!=='dealItems'))r[f]=f==='featured'?$(f).checked:$(f).value.trim();r.dealItems=collectDeals();return normal(r)}
-function close(){$('editor').classList.remove('active');editing=null}
+function close(){if($('editor').classList.contains('active')&&!confirm('Close without saving your current changes?'))return;$('editor').classList.remove('active');editing=null}
 async function save(r){if(!online){alert('Database is not connected. Changes cannot be saved.');return false}try{let result=await api('POST',r,'');await refresh();return result}catch(e){alert('Save failed: '+e.message);return false}}
 async function setStatus(r,s){if(s==='published'&&!confirm('Publish this vehicle to the public showroom? Personalised offers will remain private.'))return;if(s==='draft'&&!confirm('Remove this vehicle from the public showroom?'))return;await save({...r,status:s})}
 async function duplicate(r){let copy={...r,id:'vehicle_'+crypto.randomUUID(),title:(r.title||r.model)+' Copy',status:'draft'};await save(copy)}
 async function remove(r){if(!confirm('Permanently delete this vehicle from the shared database?'))return;try{await api('DELETE',null,'?id='+encodeURIComponent(r.id));await refresh()}catch(e){alert(e.message)}}
 function preview(){let r=values(),p=$('preview');p.replaceChildren();p.append(node('h2','',r.title),node('p','',[r.year,r.make,r.model,r.price?money(r.price):''].filter(Boolean).join(' | ')));let id=vid(r.youtube);if(id){let i=node('iframe');i.src='https://www.youtube-nocookie.com/embed/'+id;i.allowFullscreen=true;p.append(i)}else if(safeUrl(r.photo)){let i=node('img');i.src=safeUrl(r.photo);p.append(i)}p.append(node('p','',r.description));p.classList.add('active')}
 function renderOffers(){let out=$('offersList');out.replaceChildren();out.append(node('p','muted','Personalised customer offers remain private and are not shown on the public showroom.'));for(let r of records.filter(x=>x.offerPrice||x.offer)){let box=node('div','work-tile');box.append(node('h3','',r.title),node('p','',r.offerPrice?money(r.offerPrice):'Offer notes'));let b=node('button','btn dark mini-btn','Edit');b.onclick=()=>open(r.id);box.append(b);out.append(box)}}
-$('vehicleForm').onsubmit=async e=>{e.preventDefault();let r=values();if(r.youtube&&!vid(r.youtube))return alert('Invalid YouTube URL');if(r.photo&&!safeUrl(r.photo))return alert('Photo URL must use HTTPS');r.id=editing||'vehicle_'+crypto.randomUUID();if(await save(r))close()};
+async function submitVehicle(publish){if(!$('vehicleForm').reportValidity())return;let r=values();r.status=publish?'published':'draft';if(publish&&!confirm('Publish this vehicle and its selected benefits to the public showroom?'))return;if(r.youtube&&!vid(r.youtube))return alert('Invalid YouTube URL');if(r.photo&&!safeUrl(r.photo))return alert('Photo URL must use HTTPS');r.id=editing||'vehicle_'+crypto.randomUUID();if(await save(r)){$('editor').classList.remove('active');editing=null}}
+$('vehicleForm').onsubmit=e=>{e.preventDefault();submitVehicle(false)};$('publishVehicleBtn').onclick=()=>submitVehicle(true);
 $('new').onclick=()=>open(null);$('cancel').onclick=close;$('previewBtn').onclick=preview;$('search').oninput=render;
 for(let b of document.querySelectorAll('[data-tab]'))b.onclick=()=>switchTab(b.dataset.tab);
 for(let b of document.querySelectorAll('[data-go]'))b.onclick=()=>switchTab(b.dataset.go);
