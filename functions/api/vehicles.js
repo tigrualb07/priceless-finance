@@ -19,6 +19,7 @@ async function staff(request,env){
  }catch{return false}
 }
 const allowed=["title","registration","make","model","year","mileage","price","previousPrice","offerPrice","offerExpiry","doors","colour","bodyType","engine","seats","featured","fuel","gearbox","status","youtube","photo","photos","description","offer"];
+async function schema(db){const rows=await db.prepare("PRAGMA table_info(vehicles)").all();const names=new Set((rows.results||[]).map(x=>x.name));for(const [name,type] of [["title","TEXT"],["extra_json","TEXT"]])if(!names.has(name))await db.prepare("ALTER TABLE vehicles ADD COLUMN "+name+" "+type).run()}
 const columns={title:"model",registration:"registration",make:"make",model:"model",year:"year",mileage:"mileage",price:"retail_price",fuel:"fuel_type",gearbox:"transmission",status:"status",colour:"colour",bodyType:"body_type",engine:"engine_size",youtube:"youtube_url",photo:"main_image_url",description:"description",featured:"featured"};
 const toRow=x=>{let y={...x};for(let [a,b] of Object.entries(columns)){if(x[b]!==undefined)y[a]=x[b]}if(x.extra_json){try{Object.assign(y,JSON.parse(x.extra_json))}catch{}}y.id=x.id;return y};
 export async function onRequestGet({request,env}){
@@ -26,6 +27,7 @@ export async function onRequestGet({request,env}){
  const url=new URL(request.url),isAdmin=url.searchParams.get("scope")==="admin";
  if(isAdmin&&!(await staff(request,env)))return json({error:"Staff API authentication is not configured or is invalid"},403);
  try{
+ await schema(env.DB);
  const sql=isAdmin?"SELECT * FROM vehicles ORDER BY updated_at DESC LIMIT 500":"SELECT * FROM vehicles WHERE status='published' ORDER BY featured DESC,updated_at DESC LIMIT 100";
  const result=await env.DB.prepare(sql).all();
  return json({vehicles:(result.results||[]).map(toRow)});
@@ -45,6 +47,7 @@ export async function onRequestPost({request,env}){
  const extra={};for(const k of allowed)if(!(k in columns))extra[k]=typeof data[k]==="string"?data[k].slice(0,12000):data[k]??null;
  const vals=[id,String(data.registration||"").slice(0,16),make,model,Number(data.year)||null,Number(data.mileage)||null,String(data.fuel||"").slice(0,40),String(data.gearbox||"").slice(0,40),String(data.bodyType||"").slice(0,40),String(data.colour||"").slice(0,45),String(data.engine||"").slice(0,60),String(data.description||"").slice(0,12000),Number(data.price)||null,Number(data.offerPrice)||null,String(data.youtube||"").slice(0,300),url(data.photo),status,data.featured?1:0,JSON.stringify(extra),title];
  try{
+ await schema(env.DB);
  await env.DB.prepare(`INSERT INTO vehicles (id,registration,make,model,year,mileage,fuel_type,transmission,body_type,colour,engine_size,description,retail_price,offer_price,youtube_url,main_image_url,status,featured,extra_json,title) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET registration=excluded.registration,make=excluded.make,model=excluded.model,year=excluded.year,mileage=excluded.mileage,fuel_type=excluded.fuel_type,transmission=excluded.transmission,body_type=excluded.body_type,colour=excluded.colour,engine_size=excluded.engine_size,description=excluded.description,retail_price=excluded.retail_price,offer_price=excluded.offer_price,youtube_url=excluded.youtube_url,main_image_url=excluded.main_image_url,status=excluded.status,featured=excluded.featured,extra_json=excluded.extra_json,title=excluded.title,updated_at=CURRENT_TIMESTAMP`).bind(...vals).run();
  return json({ok:true,id,status});
  }catch(e){return json({error:"Database write failed",detail:String(e.message||e).slice(0,160)},500)}
