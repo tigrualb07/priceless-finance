@@ -30,7 +30,7 @@ export async function onRequestGet({request,env}){
  await schema(env.DB);
  const sql=isAdmin?"SELECT * FROM vehicles ORDER BY updated_at DESC LIMIT 500":"SELECT * FROM vehicles WHERE status='published' ORDER BY featured DESC,updated_at DESC LIMIT 100";
  const result=await env.DB.prepare(sql).all();
- return json({vehicles:(result.results||[]).map(toRow)});
+ return json({vehicles:(result.results||[]).map(x=>{const v=toRow(x);if(isAdmin)return v;return {id:v.id,title:v.title,make:v.make,model:v.model,year:v.year,mileage:v.mileage,price:v.price,fuel:v.fuel,gearbox:v.gearbox,description:v.description,photo:v.photo,youtube:v.youtube,featured:v.featured,status:v.status}})});
  }catch(e){return json({error:"Database query failed",detail:String(e.message||e).slice(0,140)},500)}
 }
 export async function onRequestPost({request,env}){
