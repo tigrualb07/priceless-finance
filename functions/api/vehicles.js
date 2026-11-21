@@ -20,7 +20,7 @@ async function staff(request,env){
  return await crypto.subtle.verify("RSASSA-PKCS1-v1_5",key,sig,new TextEncoder().encode(parts[0]+"."+parts[1]));
  }catch{return false}
 }
-const allowed=["title","registration","make","model","year","mileage","price","previousPrice","offerPrice","offerExpiry","doors","colour","bodyType","engine","seats","featured","fuel","gearbox","status","youtube","photo","photos","description","offer"];
+const allowed=["title","registration","make","model","year","mileage","price","previousPrice","offerPrice","offerExpiry","doors","colour","bodyType","engine","seats","featured","fuel","gearbox","status","youtube","photo","photos","description","offer","vatStatus","priceIncludesVat","motExpiry","roadTax","keys","serviceHistory"];
 async function schema(db){const rows=await db.prepare("PRAGMA table_info(vehicles)").all();const names=new Set((rows.results||[]).map(x=>x.name));for(const [name,type] of [["title","TEXT"],["extra_json","TEXT"]])if(!names.has(name))await db.prepare("ALTER TABLE vehicles ADD COLUMN "+name+" "+type).run()}
 const columns={title:"model",registration:"registration",make:"make",model:"model",year:"year",mileage:"mileage",price:"retail_price",fuel:"fuel_type",gearbox:"transmission",status:"status",colour:"colour",bodyType:"body_type",engine:"engine_size",youtube:"youtube_url",photo:"main_image_url",description:"description",featured:"featured"};
 const toRow=x=>{let y={...x};for(let [a,b] of Object.entries(columns)){if(x[b]!==undefined)y[a]=x[b]}if(x.extra_json){try{Object.assign(y,JSON.parse(x.extra_json))}catch{}}y.id=x.id;return y};
@@ -32,7 +32,7 @@ export async function onRequestGet({request,env}){
  await schema(env.DB);
  const sql=isAdmin?"SELECT * FROM vehicles ORDER BY updated_at DESC LIMIT 500":"SELECT * FROM vehicles WHERE status='published' ORDER BY featured DESC,updated_at DESC LIMIT 100";
  const result=await env.DB.prepare(sql).all();
- return json({vehicles:(result.results||[]).map(x=>{const v=toRow(x);if(isAdmin)return v;return {id:v.id,title:v.title,make:v.make,model:v.model,year:v.year,mileage:v.mileage,price:v.price,fuel:v.fuel,gearbox:v.gearbox,description:v.description,photo:v.photo,youtube:v.youtube,featured:v.featured,status:v.status}})});
+ return json({vehicles:(result.results||[]).map(x=>{const v=toRow(x);if(isAdmin)return v;return {id:v.id,title:v.title,make:v.make,model:v.model,year:v.year,mileage:v.mileage,price:v.price,fuel:v.fuel,gearbox:v.gearbox,description:v.description,photo:v.photo,youtube:v.youtube,featured:v.featured,status:v.status,vatStatus:v.vatStatus,priceIncludesVat:v.priceIncludesVat!=='false',motExpiry:v.motExpiry,roadTax:v.roadTax,keys:v.keys,serviceHistory:v.serviceHistory,photos:v.photos}})});
  }catch(e){return json({error:"Database query failed",detail:String(e.message||e).slice(0,140)},500)}
 }
 export async function onRequestPost({request,env}){
