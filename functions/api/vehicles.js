@@ -20,7 +20,7 @@ async function staff(request,env){
  return await crypto.subtle.verify("RSASSA-PKCS1-v1_5",key,sig,new TextEncoder().encode(parts[0]+"."+parts[1]));
  }catch{return false}
 }
-const allowed=["title","registration","make","model","year","mileage","price","previousPrice","offerPrice","offerExpiry","doors","colour","bodyType","engine","seats","featured","fuel","gearbox","status","youtube","photo","photos","description","offer","vatStatus","priceIncludesVat","motExpiry","roadTax","keys","serviceHistory"];
+const allowed=["title","registration","make","model","year","mileage","price","previousPrice","offerPrice","offerExpiry","doors","colour","bodyType","engine","seats","featured","fuel","gearbox","status","youtube","photo","photos","description","offer","vatStatus","priceIncludesVat","motExpiry","roadTax","keys","serviceHistory","dealItems"];
 async function schema(db){const rows=await db.prepare("PRAGMA table_info(vehicles)").all();const names=new Set((rows.results||[]).map(x=>x.name));for(const [name,type] of [["title","TEXT"],["extra_json","TEXT"]])if(!names.has(name))await db.prepare("ALTER TABLE vehicles ADD COLUMN "+name+" "+type).run()}
 const columns={title:"model",registration:"registration",make:"make",model:"model",year:"year",mileage:"mileage",price:"retail_price",fuel:"fuel_type",gearbox:"transmission",status:"status",colour:"colour",bodyType:"body_type",engine:"engine_size",youtube:"youtube_url",photo:"main_image_url",description:"description",featured:"featured"};
 const toRow=x=>{let y={...x};for(let [a,b] of Object.entries(columns)){if(x[b]!==undefined)y[a]=x[b]}if(x.extra_json){try{Object.assign(y,JSON.parse(x.extra_json))}catch{}}y.id=x.id;return y};
@@ -32,7 +32,7 @@ export async function onRequestGet({request,env}){
  await schema(env.DB);
  const sql=isAdmin?"SELECT * FROM vehicles ORDER BY updated_at DESC LIMIT 500":"SELECT * FROM vehicles WHERE status='published' ORDER BY featured DESC,updated_at DESC LIMIT 100";
  const result=await env.DB.prepare(sql).all();
- return json({vehicles:(result.results||[]).map(x=>{const v=toRow(x);if(isAdmin)return v;return {id:v.id,title:v.title,make:v.make,model:v.model,year:v.year,mileage:v.mileage,price:v.price,fuel:v.fuel,gearbox:v.gearbox,description:v.description,photo:v.photo,youtube:v.youtube,featured:v.featured,status:v.status,vatStatus:v.vatStatus,priceIncludesVat:v.priceIncludesVat!=='false',motExpiry:v.motExpiry,roadTax:v.roadTax,keys:v.keys,serviceHistory:v.serviceHistory,photos:v.photos}})});
+ return json({vehicles:(result.results||[]).map(x=>{const v=toRow(x);if(isAdmin)return v;return {id:v.id,title:v.title,make:v.make,model:v.model,year:v.year,mileage:v.mileage,price:v.price,fuel:v.fuel,gearbox:v.gearbox,description:v.description,photo:v.photo,youtube:v.youtube,featured:v.featured,status:v.status,vatStatus:v.vatStatus,priceIncludesVat:v.priceIncludesVat!=='false',motExpiry:v.motExpiry,roadTax:v.roadTax,keys:v.keys,serviceHistory:v.serviceHistory,photos:v.photos,offerPrice:v.offerPrice,previousPrice:v.previousPrice,offerExpiry:v.offerExpiry,dealItems:v.dealItems}})});
  }catch(e){return json({error:"Database query failed",detail:String(e.message||e).slice(0,140)},500)}
 }
 export async function onRequestPost({request,env}){
@@ -46,6 +46,7 @@ export async function onRequestPost({request,env}){
  const status=["draft","ready","published","reserved","sold"].includes(data.status)?data.status:"draft";
  const url=v=>{if(!v)return "";try{const u=new URL(v);return u.protocol==="https:"?u.href:""}catch{return ""}};
  if(data.photo&&!url(data.photo))return json({error:"Photo must be an HTTPS URL"},400);
+ if(data.dealItems!==undefined){if(!Array.isArray(data.dealItems)||data.dealItems.length>60)return json({error:"Invalid deal items"},400);data.dealItems=data.dealItems.map(x=>({name:String(x.name||"").slice(0,160),description:String(x.description||"").slice(0,500),type:["included","free","charged","optional"].includes(x.type)?x.type:"included",price:Math.max(0,Math.min(100000,Number(x.price)||0))})).filter(x=>x.name)}
  const extra={};for(const k of allowed)if(!(k in columns))extra[k]=typeof data[k]==="string"?data[k].slice(0,12000):data[k]??null;
  const vals=[id,String(data.registration||"").slice(0,16),make,model,Number(data.year)||null,Number(data.mileage)||null,String(data.fuel||"").slice(0,40),String(data.gearbox||"").slice(0,40),String(data.bodyType||"").slice(0,40),String(data.colour||"").slice(0,45),String(data.engine||"").slice(0,60),String(data.description||"").slice(0,12000),Number(data.price)||null,Number(data.offerPrice)||null,String(data.youtube||"").slice(0,300),url(data.photo),status,data.featured?1:0,JSON.stringify(extra),title];
  try{
