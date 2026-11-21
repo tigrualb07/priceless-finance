@@ -88,7 +88,7 @@ groups.forEach(([title,desc,ids],i)=>{
 fields.replaceChildren(fragment);
 const syncHistory=()=>right.querySelectorAll('.admin-optional-row').forEach(x=>x._syncFromValue());
 document.getElementById('vehicleForm').addEventListener('reset',()=>queueMicrotask(syncHistory));
-const observer=new MutationObserver(()=>{syncHistory();observer.disconnect()});
+const observer=new MutationObserver(()=>queueMicrotask(()=>{syncHistory();document.getElementById('vatStatus').dispatchEvent(new Event('change'))}));
 const edit=document.getElementById('editor');
 if(edit)observer.observe(edit,{attributes:true,attributeFilter:['class']});
 document.getElementById('vehicleForm').addEventListener('invalid',e=>{
