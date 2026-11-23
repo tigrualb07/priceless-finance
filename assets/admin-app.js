@@ -33,21 +33,22 @@ const presets=[
 ['Extended Warranty 24 Months','optional']
 ];
 function dealControl(item={},nameEditable=true){
-const row=node('div',nameEditable?'deal-item':'preset-item');
+const row=node('details',nameEditable?'deal-item':'preset-item');row.open=!!nameEditable;
 const head=node('label');head.style.cssText='display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px';
 const enabled=node('input');enabled.type='checkbox';enabled.checked=nameEditable||!!item.enabled;
 const name=nameEditable?node('input'):node('span','',item.name||'');if(nameEditable){name.value=item.name||'';name.placeholder='Benefit name';name.maxLength=160;name.style.cssText='width:100%;padding:9px'}head.append(enabled,name);
+const summary=node('summary');summary.style.cssText='cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 0';const status=node('span');status.style.cssText='font-size:11px;font-weight:800;color:#276345;white-space:nowrap';summary.append(head,status);
 const controls=node('div');controls.style.cssText='display:grid;grid-template-columns:minmax(115px,1fr) minmax(95px,.7fr) minmax(95px,.7fr);gap:7px;margin-top:9px';
 const type=node('select');for(const [value,title] of [['included','Included'],['free','FREE'],['charged','CHARGE'],['optional','Customer Optional']]){const o=node('option','',title);o.value=value;type.append(o)}type.value=item.type||'included';
 const normal=node('input');normal.type='number';normal.min='0';normal.step='.01';normal.placeholder='Normal £';normal.value=item.originalPrice??item.price??0;normal.title='Normal retail value';
 const offer=node('input');offer.type='number';offer.min='0';offer.step='.01';offer.placeholder='Customer £';offer.value=item.price??0;offer.title='Price charged to customer';
 const desc=node('textarea');desc.placeholder='Conditions, duration, coverage or personalised details';desc.value=item.description||'';desc.rows=2;desc.style.cssText='width:100%;margin-top:8px';
-const sync=()=>{const active=enabled.checked;row.classList.toggle('is-inactive',!active&&!nameEditable);type.disabled=!active;normal.disabled=!active||type.value==='included';offer.disabled=!active||type.value==='included'||type.value==='free';normal.style.display=type.value==='included'?'none':'';offer.style.display=['included','free'].includes(type.value)?'none':'';row.style.borderColor=active&&type.value==='optional'?'#2582b7':'#dce9df';row.style.background=active&&type.value==='optional'?'#e9f5ff':'#fff';controls.style.opacity=active?'1':'.55';if(type.value==='free')normal.placeholder='Value shown crossed out £';if(type.value==='charged')normal.placeholder='Normal value £';};
-type.onchange=sync;enabled.onchange=()=>{sync();if(!nameEditable)refreshPresetCatalog()};
+const sync=()=>{const active=enabled.checked;row.classList.toggle('is-inactive',!active&&!nameEditable);type.disabled=!active;normal.disabled=!active||type.value==='included';offer.disabled=!active||type.value==='included'||type.value==='free';normal.style.display=type.value==='included'?'none':'';offer.style.display=['included','free'].includes(type.value)?'none':'';row.style.borderColor=active&&type.value==='optional'?'#2582b7':'#dce9df';row.style.background=active&&type.value==='optional'?'#e9f5ff':'#fff';status.textContent=active?({included:'INCLUDED',free:'FREE',charged:'CHARGE',optional:'OPTIONAL'}[type.value]||''):'';controls.style.opacity=active?'1':'.55';if(type.value==='free')normal.placeholder='Value shown crossed out £';if(type.value==='charged')normal.placeholder='Normal value £';};
+type.onchange=sync;enabled.onchange=()=>{sync();if(enabled.checked)row.open=true;if(!nameEditable)refreshPresetCatalog()};
 const wrap=(label,input)=>{const w=node('label');w.style.cssText='font-size:11px;display:grid;gap:4px';w.append(document.createTextNode(label),input);return w};
 const normWrap=wrap('Normal value (£)',normal),offerWrap=wrap('Customer price (£)',offer);controls.append(wrap('Offer type',type),normWrap,offerWrap);
 const syncLabels=()=>{normWrap.style.display=type.value==='included'?'none':'';offerWrap.style.display=['included','free'].includes(type.value)?'none':''};const oldSync=type.onchange;type.onchange=()=>{oldSync();syncLabels()};sync();syncLabels();
-row.append(head,controls,desc);
+row.append(summary,controls,desc);
 if(nameEditable){const remove=node('button','btn outline','Remove');remove.type='button';remove.style.marginTop='8px';remove.onclick=()=>row.remove();row.append(remove)}
 row._get=()=>enabled.checked?{name:nameEditable?name.value.trim():item.name,type:type.value,price:type.value==='included'||type.value==='free'?0:Math.max(0,Number(offer.value)||0),originalPrice:type.value==='included'?0:Math.max(0,Number(normal.value)||0),description:desc.value.trim()}:null;
 return row
