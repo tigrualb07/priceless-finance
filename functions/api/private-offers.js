@@ -34,7 +34,7 @@ export async function onRequestPost({request,env}){if(!await staff(request,env))
 if(d.action==='createCustomer'){
  const customer=String(d.customer||'').trim().slice(0,100),phone=String(d.phone||'').trim().slice(0,80),email=String(d.email||'').trim().slice(0,180);
  const registration=String(d.registration||'').trim().toUpperCase().slice(0,16),make=String(d.make||'').trim().slice(0,50),model=String(d.model||'').trim().slice(0,80),mileage=Number(d.mileage),price=Number(d.price);
- if(!customer||!registration||!make||!model||!Number.isFinite(mileage)||mileage<0||!Number.isFinite(price)||price<=0||price>10000000||email&&!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email))return json({error:"Complete customer name, valid email if supplied, registration, make, model, mileage and price"},400);
+ if(!customer||!registration||!make||!model||!Number.isFinite(mileage)||mileage<0||!Number.isFinite(price)||price<=0||price>10000000||email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json({error:"Complete customer name, valid email if supplied, registration, make, model, mileage and price"},400);
  const id=crypto.randomUUID(),vehicleId='vehicle_'+crypto.randomUUID(),t=token(),hash=await digest(t);
  try{
  await env.DB.batch([
