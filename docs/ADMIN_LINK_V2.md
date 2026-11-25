@@ -103,6 +103,14 @@ CLOUDFLARE_SEND_METRICS=false npx wrangler pages functions build functions --out
 
 Official D1 semantics verified: https://developers.cloudflare.com/d1/worker-api/d1-database/ . A D1 batch is a transaction and aborts or rolls back if a statement fails.
 
+## Empty Preview database initialization
+
+Use a separate empty D1 database for Preview, bound as `DB`. Run `docs/PREVIEW_BOOTSTRAP.sql` in that database's Console to create the initial `vehicles` table. This additive statement does not import any customer data. The authenticated offer API creates its own offer, audit, backup and snapshot tables when first used.
+
+Protect Preview deployments with Cloudflare Access. Set Preview's `ACCESS_AUD` to the Preview application's Application Audience tag, and `ACCESS_TEAM_DOMAIN` to the existing team domain. Check the actual allow policy before testing. Do not copy the production application's audience tag into a separate Preview Access application.
+
+Redeploy the V2 branch after changing Preview bindings or variables, then verify the resulting deployment's staff and customer flows. Saving Dashboard configuration does not apply it to an already built deployment.
+
 ## Production continuation
 
 1. Authenticate Cloudflare Access for Priceless Finance Admin and identify the actual production deployment commit.
