@@ -6,7 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import vm from 'node:vm';
 import * as api from '../functions/api/private-offers.js';
-import {published, item} from './fixture.js';
+import {published, item, pxFixture} from './fixture.js';
 import {calculate, money} from '../assets/deal-engine.js';
 
 const require = process.env.V2_TEST_RUNTIME ? createRequire(path.join(process.env.V2_TEST_RUNTIME, 'package.json')) : createRequire(import.meta.url);
@@ -36,7 +36,7 @@ async function ui(admin) {
   }
   await (await module(path.join(root, admin ? 'assets/deal-admin.js' : 'assets/deal-customer.js'))).evaluate();
   const idle = async () => { for (let i = 0; i < 20; i++) { await new Promise(r => setTimeout(r, 5)); if (!pending) return; } throw Error('Component request did not complete'); };
-  return {dom, w, doc: w.document, idle, poll: async () => { for (const fn of [...intervals.values()]) await fn(); await idle(); }, cleanup: () => { for (const id of timeouts) clearTimeout(id); intervals.clear(); w.close(); }, button: (text, parent = w.document) => { const button = [...parent.querySelectorAll('button')].find(b => b.textContent === text); assert.ok(button, 'Missing button: ' + text); return button; }, set: (name, value) => { const node = w.document.querySelector('#editorFields [name="' + name + '"]'); assert.ok(node, 'Missing editor field ' + name); if (node.type === 'checkbox') node.checked = value; else node.value = value; node.dispatchEvent(new w.Event('input', {bubbles: true})); node.dispatchEvent(new w.Event('change', {bubbles: true})); return node; }, submit: async () => { w.document.querySelector('#editorForm').dispatchEvent(new w.Event('submit', {bubbles: true, cancelable: true})); await idle(); assert.equal(w.document.querySelector('#editorError').textContent, '', 'Editor save failed'); assert.equal(w.document.querySelector('#editor').open, false); }};
+  return {dom, w, doc: w.document, idle, renderPrint: modules.get(path.join(root, 'assets/deal-ui.js')).namespace.renderPrint, poll: async () => { for (const fn of [...intervals.values()]) await fn(); await idle(); }, cleanup: () => { for (const id of timeouts) clearTimeout(id); intervals.clear(); w.close(); }, button: (text, parent = w.document) => { const button = [...parent.querySelectorAll('button')].find(b => b.textContent === text); assert.ok(button, 'Missing button: ' + text); return button; }, set: (name, value) => { const node = w.document.querySelector('#editorFields [name="' + name + '"]'); assert.ok(node, 'Missing editor field ' + name); if (node.type === 'checkbox') node.checked = value; else node.value = value; node.dispatchEvent(new w.Event('input', {bubbles: true})); node.dispatchEvent(new w.Event('change', {bubbles: true})); return node; }, submit: async () => { w.document.querySelector('#editorForm').dispatchEvent(new w.Event('submit', {bubbles: true, cancelable: true})); await idle(); assert.equal(w.document.querySelector('#editorError').textContent, '', 'Editor save failed'); assert.equal(w.document.querySelector('#editor').open, false); }};
 }
 const admin = await ui(true), customer = await ui(false);
 const parity = () => { const expected = money(calculate(f.state()).outstandingPence); for (const view of [admin, customer]) assert.equal(view.doc.querySelector('[data-testid=outstanding]').textContent, expected); };
@@ -107,4 +107,19 @@ try {
   assert.equal(customer.button('Offer Finalised').disabled, true); assert.equal(customer.doc.querySelector('input[data-item-id="' + b.id + '"]').disabled, true);
   customer.button('Print Offer / Save PDF').click(); const finalText = customer.doc.querySelector('#printDocument').textContent; assert.ok(finalText.includes('Finalised Offer')); assert.ok(!finalText.includes('Same Name')); assert.ok(finalText.includes('Payments received after refunds'));
   process.stdout.write('PASS DOM final review, locked controls and snapshot-based final document content\n');
+
+  const px = await pxFixture({finance: 'yes', settlement: 150000});
+  await px.send('valuationDecision', {valuationId: px.deal.px.valuation.id, status: 'accepted'}, 'customer');
+  let printData = {deal: px.state(), calculation: calculate(px.state())};
+  customer.renderPrint(printData); admin.renderPrint(printData);
+  const customerPrint = customer.doc.querySelector('#printDocument');
+  assert.equal(customerPrint.textContent, admin.doc.querySelector('#printDocument').textContent);
+  assert.ok(customerPrint.textContent.includes('Accepted net PX allowance£1,500.00'));
+  assert.ok([...customerPrint.querySelectorAll('details')].every(node => node.open), 'PX vehicle details must be expanded in the printed document');
+  await px.send('withdrawPX', {}, 'customer'); printData = {deal: px.state(), calculation: calculate(px.state())};
+  customer.renderPrint(printData);
+  assert.ok(customerPrint.textContent.includes('No PX allowance is applied to this offer.'));
+  assert.ok(customerPrint.textContent.includes('Accepted net PX allowance£0.00'));
+  assert.ok(!customerPrint.textContent.includes('£3,000.00'), 'Withdrawn valuation must not look like an active allowance');
+  process.stdout.write('PASS DOM printed PX details, identical Admin and customer documents, and withdrawn allowance clarity\n');
 } finally { admin.cleanup(); customer.cleanup(); }
