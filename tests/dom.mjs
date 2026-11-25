@@ -76,6 +76,21 @@ try {
   admin.doc.querySelector('.composer textarea').value = 'Staff reply'; admin.button('Send Message').click(); await admin.idle(); await customer.poll(); assert.ok(customer.doc.body.textContent.includes('Staff reply'));
   process.stdout.write('PASS DOM bidirectional messages and successful-save draft clearing\n');
 
+  f.deal = f.state(); await f.send('unpublish'); await customer.poll();
+  assert.equal(customer.doc.querySelector('#workspace').hidden, true);
+  assert.match(customer.doc.querySelector('#notice').textContent, /no longer available/);
+  const initiallyUnavailable = await ui(false);
+  try {
+    assert.equal(initiallyUnavailable.doc.querySelector('#workspace').hidden, true);
+    f.deal = f.state(); await f.send('publish'); await customer.poll(); await initiallyUnavailable.poll(); await admin.poll();
+    for (const view of [customer, initiallyUnavailable]) {
+      assert.equal(view.doc.querySelector('#workspace').hidden, false, 'Republished offer should recover without reloading');
+      assert.equal(view.doc.querySelector('#notice').textContent, '', 'Availability error should clear after recovery');
+    }
+    parity();
+  } finally { initiallyUnavailable.cleanup(); }
+  process.stdout.write('PASS DOM unpublish and republish recover existing and initially unavailable customer pages\n');
+
   admin.button('Set Deposit Requested').click(); admin.set('deposit', '200'); const before = calculate(f.state()).outstandingPence; await admin.submit(); await customer.poll(); parity(); assert.equal(calculate(f.state()).outstandingPence, before);
   admin.button('Record Payment / Refund').click(); admin.set('amount', '200'); admin.set('reference', 'SYNTHETIC'); admin.set('confirmed', true); await admin.submit(); await customer.poll(); parity(); assert.equal(calculate(f.state()).outstandingPence, before - 20000);
   process.stdout.write('PASS DOM requested deposit and confirmed payment ledger\n');

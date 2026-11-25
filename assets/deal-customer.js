@@ -2,8 +2,12 @@ import {WARRANTY, calculate, warrantyQuote} from './deal-engine.js';
 import {$, h, btn, line, tick, money, ukDate, notice, Store, sectionUpdate, disclosure, createLayout, updateHeader, renderCustomer, renderVehicle, renderNotes, renderCalculation, renderPayments, renderPX, pxEditor, priceLabel, printOffer, clone} from './deal-ui.js';
 
 const token = new URLSearchParams(location.search).get('token');
-let refs;
-const store = new Store({token, onChange: render, onUnavailable: e => { $('workspace').hidden = true; notice(e.message + '. Please contact Priceless for an updated offer.', true); }});
+let refs, unavailableNotice = null;
+function unavailable(e) {
+  unavailableNotice = e.message + '. Please contact Priceless for an updated offer.';
+  $('workspace').hidden = true; notice(unavailableNotice, true);
+}
+const store = new Store({token, onChange: render, onUnavailable: unavailable});
 async function action(name, values = {}, preview) {
   if (store.busy) { notice('Your previous choice is being saved.'); return; }
   if (preview) {
@@ -59,6 +63,11 @@ function renderPreference(d) {
   return h('div', {}, h('h3', {}, 'Preferred Payment Method'), choices, h('small', {}, 'Your preference does not initiate a payment.'), d.preferredPaymentMethod === 'finance' && h('p', {}, 'Finance is subject to status, affordability and lender approval. Minimum finance £4,000. ', h('a', {href: '/apply/'}, 'Continue to Finance Application')));
 }
 function render(data) {
+  if (unavailableNotice !== null) {
+    $('workspace').hidden = false;
+    if ($('notice').textContent === unavailableNotice) notice('');
+    unavailableNotice = null;
+  }
   const d = data.deal, c = data.calculation; updateHeader(refs, store);
   sectionUpdate(refs.customer, d.customer, () => renderCustomer(d));
   renderNotes(refs.notes, data.notes, d, false);
@@ -79,4 +88,7 @@ try {
   if (!/^[a-f0-9]{64}$/.test(token || '')) throw Error('This private offer is unavailable');
   refs = createLayout(store, {onPrint: () => printOffer(store)});
   await store.load(); store.start();
-} catch (e) { $('workspace').hidden = true; $('loading').hidden = true; notice(e.message + '. Please contact Priceless for an updated offer.', true); }
+} catch (e) {
+  unavailable(e); $('loading').hidden = true;
+  if (refs && [403, 404, 410].includes(e.status)) store.start();
+}
