@@ -80,7 +80,7 @@ export class Store {
     this.busy = true;
     try {
       const data = await this.request('/api/private-offers', this.admin ? 'PATCH' : 'PUT', {...(this.admin ? {id: this.id} : {token: this.token}), version, action, ...values});
-      this.receive(data); if (!silent) notice('Saved. Both views use offer version ' + data.deal.version + '.'); return data;
+      this.receive(data); if (!silent) notice('Saved successfully.'); return data;
     } catch (e) {
       if (e.status === 409 || e.status === 428) { await this.load().catch(() => {}); notice(e.message + '. Your draft is still open.', true); }
       throw e;
