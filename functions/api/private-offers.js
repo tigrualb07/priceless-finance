@@ -1,58 +1,213 @@
-const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store, private","x-robots-tag":"noindex, nofollow","referrer-policy":"no-referrer","x-content-type-options":"nosniff"}});
-async function staff(request,env){
- const cookie=request.headers.get("Cookie")||"";
- const accessCookie=cookie.split(";").map(x=>x.trim()).find(x=>x.startsWith("CF_Authorization="));
- const token=request.headers.get("Cf-Access-Jwt-Assertion")||(accessCookie?decodeURIComponent(accessCookie.slice("CF_Authorization=".length)):"");
- if(!token||!env.ACCESS_TEAM_DOMAIN||!env.ACCESS_AUD)return false;
- try{
- const parts=token.split(".");if(parts.length!==3)return false;
- const decode=s=>JSON.parse(atob(s.replace(/-/g,"+").replace(/_/g,"/")));
- const header=decode(parts[0]),payload=decode(parts[1]);
- if(header.alg!=="RS256"||!header.kid||payload.aud!==env.ACCESS_AUD&&!(Array.isArray(payload.aud)&&payload.aud.includes(env.ACCESS_AUD)))return false;
- const domain=String(env.ACCESS_TEAM_DOMAIN).replace(/^https?:\/\//,"").replace(/\/$/,"");
- if(!/^[a-z0-9.-]+\.cloudflareaccess\.com$/i.test(domain))return false;
- if(payload.iss!=="https://"+domain||!payload.exp||payload.exp<=Date.now()/1000)return false;
- const response=await fetch("https://"+domain+"/cdn-cgi/access/certs");
- if(!response.ok)return false;
- const jwks=await response.json(),jwk=jwks.keys?.find(k=>k.kid===header.kid&&k.kty==="RSA");if(!jwk)return false;
- const key=await crypto.subtle.importKey("jwk",jwk,{name:"RSASSA-PKCS1-v1_5",hash:"SHA-256"},false,["verify"]);
- const sig=Uint8Array.from(atob(parts[2].replace(/-/g,"+").replace(/_/g,"/")),c=>c.charCodeAt(0));
- return await crypto.subtle.verify("RSASSA-PKCS1-v1_5",key,sig,new TextEncoder().encode(parts[0]+"."+parts[1]));
- }catch{return false}
+import {calculate, finalIssues, clone} from '../../assets/deal-engine.js';
+import {DealError, assert, id, freshDeal, migrateLegacy, sourceVehicle, mutate, publicDeal} from '../lib/deal-domain.js';
+
+const headers = {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store, private', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff'};
+const json = (data, status = 200) => new Response(JSON.stringify(data), {status, headers});
+const safeParse = (value, fallback = {}) => { try { return JSON.parse(value); } catch { return fallback; } };
+const randomToken = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('');
+export const digest = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), b => b.toString(16).padStart(2, '0')).join('');
+const certCache = new Map();
+async function staff(request, env) {
+  try {
+    const cookie = (request.headers.get('Cookie') || '').split(';').map(x => x.trim()).find(x => x.startsWith('CF_Authorization='));
+    const token = request.headers.get('Cf-Access-Jwt-Assertion') || (cookie ? decodeURIComponent(cookie.slice(17)) : '');
+    if (!token || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) return null;
+    const parts = token.split('.'); if (parts.length !== 3) return null;
+    const decode = s => JSON.parse(atob(s.replace(/-/g, '+').replace(/_/g, '/')));
+    const header = decode(parts[0]), payload = decode(parts[1]);
+    const domain = String(env.ACCESS_TEAM_DOMAIN).replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (!/^[a-z0-9.-]+\.cloudflareaccess\.com$/i.test(domain) || header.alg !== 'RS256' || !header.kid) return null;
+    if (payload.iss !== 'https://' + domain || !payload.exp || payload.exp <= Date.now() / 1000 || payload.nbf && payload.nbf > Date.now() / 1000 + 30) return null;
+    if (payload.aud !== env.ACCESS_AUD && !(Array.isArray(payload.aud) && payload.aud.includes(env.ACCESS_AUD))) return null;
+    let certs = certCache.get(domain);
+    if (!certs || certs.expires < Date.now() || !certs.keys.some(k => k.kid === header.kid)) {
+      const r = await fetch('https://' + domain + '/cdn-cgi/access/certs'); if (!r.ok) return null;
+      const jwks = await r.json(); certs = {keys: jwks.keys || [], expires: Date.now() + 300000}; certCache.set(domain, certs);
+    }
+    const jwk = certs.keys.find(k => k.kid === header.kid && k.kty === 'RSA'); if (!jwk) return null;
+    const key = await crypto.subtle.importKey('jwk', jwk, {name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256'}, false, ['verify']);
+    const signature = Uint8Array.from(atob(parts[2].replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+    if (!await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, new TextEncoder().encode(parts[0] + '.' + parts[1]))) return null;
+    return {subject: String(payload.email || payload.sub || 'Authenticated staff').slice(0, 180)};
+  } catch { return null; }
 }
-
-const token=()=>Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');
-const digest=async t=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t))),b=>b.toString(16).padStart(2,'0')).join('');
-async function setup(db){await db.prepare("CREATE TABLE IF NOT EXISTS private_offers (id TEXT PRIMARY KEY, vehicle_id TEXT NOT NULL, customer_label TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, offer_json TEXT NOT NULL, expires_at TEXT, revoked INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();await db.prepare("CREATE TABLE IF NOT EXISTS private_offer_events (id TEXT PRIMARY KEY, offer_id TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();try{await db.prepare("ALTER TABLE private_offers ADD COLUMN locked INTEGER NOT NULL DEFAULT 0").run()}catch{};try{await db.prepare("ALTER TABLE private_offers ADD COLUMN selected_json TEXT NOT NULL DEFAULT '[]'").run()}catch{};await db.prepare("CREATE TABLE IF NOT EXISTS private_offer_selections (id TEXT PRIMARY KEY, offer_id TEXT NOT NULL, selection_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run()}
-const migrate=async db=>{for(const [col,definition] of [["customer_phone","TEXT NOT NULL DEFAULT ''"],["customer_email","TEXT NOT NULL DEFAULT ''"],["published","INTEGER NOT NULL DEFAULT 1"],["vehicle_override","TEXT NOT NULL DEFAULT '{}'"],["share_token","TEXT"]]){try{await db.prepare("ALTER TABLE private_offers ADD COLUMN "+col+" "+definition).run()}catch{}}};
-async function pxState(db,id){const e=await db.prepare("SELECT id,payload FROM private_offer_events WHERE offer_id=? AND kind='partExchange' ORDER BY rowid DESC LIMIT 1").bind(id).first();const v=await db.prepare("SELECT id,payload FROM private_offer_events WHERE offer_id=? AND kind='valuation' ORDER BY rowid DESC LIMIT 1").bind(id).first();if(!e||!v)return null;const x=JSON.parse(v.payload);if(x.pxId!==e.id)return null;const a=await db.prepare("SELECT payload FROM private_offer_events WHERE offer_id=? AND kind='valuationDecision' ORDER BY rowid DESC LIMIT 1").bind(id).first();const decision=a?JSON.parse(a.payload):{};return {...x,id:v.id,status:decision.valuationId===v.id?decision.status:'pending'}}
-const warrantyPrices={standard:[181,199,498,698],special:[271.5,298.5,747,1047]};const warrantyMonths=[3,6,12,24];async function warrantyState(db,id){const e=await db.prepare("SELECT id,kind,payload FROM private_offer_events WHERE offer_id=? AND kind IN ('warrantyRequest','warrantyReview','warrantyAccept') ORDER BY rowid DESC LIMIT 1").bind(id).first();if(!e)return null;return {...JSON.parse(e.payload),id:e.id}}const allowedDays=new Set([1,7,30]);
-export async function onRequestGet({request,env}){if(!env.DB)return json({error:"Database unavailable"},503);const u=new URL(request.url);try{await setup(env.DB);await migrate(env.DB);if(u.searchParams.has('token')){const t=u.searchParams.get('token');if(!/^[a-f0-9]{64}$/.test(t||''))return json({error:"Offer unavailable"},404);const row=await env.DB.prepare("SELECT id,vehicle_id,customer_label,offer_json,expires_at,revoked,locked,selected_json,updated_at,published,vehicle_override FROM private_offers WHERE token_hash=?").bind(await digest(t)).first();if(!row||row.revoked||!row.published||row.expires_at&&Date.parse(row.expires_at)<=Date.now())return json({error:"This private offer is no longer available"},410);const v=await env.DB.prepare("SELECT * FROM vehicles WHERE id=?").bind(row.vehicle_id).first();if(!v)return json({error:"Offer unavailable"},404);const d=JSON.parse(row.offer_json);const override=JSON.parse(row.vehicle_override||'{}');return json({vehicle:{registration:v.registration,title:v.title,make:v.make,model:v.model,year:v.year,mileage:v.mileage,fuel:v.fuel_type,gearbox:v.transmission,description:v.description,youtube:v.youtube_url,photo:v.main_image_url,...override},offer:{customerName:row.customer_label,price:d.price,retailPrice:Math.max(Number(d.price)||0,Number(v.retail_price)||0),vehicleVat:d.vehicleVat===true,items:d.items||[],expiresAt:row.expires_at,locked:!!row.locked,selected:JSON.parse(row.selected_json||"[]"),revision:row.updated_at,valuation:await pxState(env.DB,row.id),warranty:await warrantyState(env.DB,row.id),preferences:(await env.DB.prepare("SELECT kind,payload FROM private_offer_events WHERE offer_id=? AND kind IN ('payment','partExchange') ORDER BY created_at DESC,rowid DESC LIMIT 100").bind(row.id).all()).results||[],notes:(await env.DB.prepare("SELECT actor,payload,created_at FROM private_offer_events WHERE offer_id=? AND kind='note' ORDER BY created_at ASC LIMIT 200").bind(row.id).all()).results||[]}})}
-if(!await staff(request,env))return json({error:"Staff authentication required"},403);
-const rows=await env.DB.prepare("SELECT id,vehicle_id,customer_label,customer_phone,customer_email,vehicle_override,published,share_token,offer_json,expires_at,revoked,locked,selected_json,created_at,updated_at FROM private_offers ORDER BY created_at DESC LIMIT 200").all();const submissions=await env.DB.prepare("SELECT id,offer_id,selection_json,created_at FROM private_offer_selections ORDER BY created_at DESC LIMIT 500").all();const events=await env.DB.prepare("SELECT * FROM private_offer_events ORDER BY rowid DESC LIMIT 1000").all();return json({offers:(rows.results||[]).map(({share_token,...x})=>({...x,private_url:share_token?new URL("/offer/?token="+share_token,request.url).href:null,offer_json:JSON.parse(x.offer_json),selected:JSON.parse(x.selected_json||"[]"),vehicle_override:JSON.parse(x.vehicle_override||"{}")})),events:events.results||[],submissions:(submissions.results||[]).map(x=>({...x,selection:JSON.parse(x.selection_json)}))});
-}catch{return json({error:"Unable to retrieve offers"},500)}}
-export async function onRequestPost({request,env}){if(!await staff(request,env))return json({error:"Staff authentication required"},403);if(!env.DB)return json({error:"Database unavailable"},503);try{await setup(env.DB);await migrate(env.DB);const d=await request.json();
-if(d.action==='createCustomer'){
- const customer=String(d.customer||'').trim().slice(0,100),phone=String(d.phone||'').trim().slice(0,80),email=String(d.email||'').trim().slice(0,180);
- const registration=String(d.registration||'').trim().toUpperCase().slice(0,16),make=String(d.make||'').trim().slice(0,50),model=String(d.model||'').trim().slice(0,80),mileage=Number(d.mileage),netPrice=Number(d.price),vehicleVat=d.vehicleVat===true,price=Math.round(netPrice*(vehicleVat?1.2:1)*100)/100;
- if(!customer||!registration||!make||!model||!Number.isFinite(mileage)||mileage<0||!Number.isFinite(price)||price<=0||price>10000000||email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json({error:"Complete customer name, valid email if supplied, registration, make, model, mileage and price"},400);
- const id=crypto.randomUUID(),vehicleId='vehicle_'+crypto.randomUUID(),t=token(),hash=await digest(t);
- try{
- await env.DB.batch([
- env.DB.prepare("INSERT INTO vehicles (id,registration,make,model,mileage,retail_price,status,title,extra_json) VALUES (?,?,?,?,?,?,?,?,?)").bind(vehicleId,registration,make,model,mileage,price,'draft',make+' '+model,JSON.stringify({customerDealOnly:true})),
- env.DB.prepare("INSERT INTO private_offers(id,vehicle_id,customer_label,customer_phone,customer_email,token_hash,offer_json,expires_at,published,share_token) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(id,vehicleId,customer,phone,email,hash,JSON.stringify({price,vehicleVat,items:[]}),null,0,t)
- ]);
- return json({ok:true,id,vehicleId,url:new URL('/offer/?token='+t,request.url).href});
- }catch(e){return json({error:"Could not create customer deal",detail:String(e.message||e).slice(0,160)},500)}
+export async function setup(db) {
+  await db.prepare(`CREATE TABLE IF NOT EXISTS private_offers (id TEXT PRIMARY KEY, vehicle_id TEXT NOT NULL, customer_label TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, offer_json TEXT NOT NULL, expires_at TEXT, revoked INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run();
+  const existing = new Set(((await db.prepare('PRAGMA table_info(private_offers)').all()).results || []).map(x => x.name));
+  for (const [column, definition] of [['locked', 'INTEGER NOT NULL DEFAULT 0'], ['selected_json', "TEXT NOT NULL DEFAULT '[]'"], ['customer_phone', "TEXT NOT NULL DEFAULT ''"], ['customer_email', "TEXT NOT NULL DEFAULT ''"], ['published', 'INTEGER NOT NULL DEFAULT 1'], ['vehicle_override', "TEXT NOT NULL DEFAULT '{}'"], ['share_token', 'TEXT']]) {
+    if (!existing.has(column)) { try { await db.prepare('ALTER TABLE private_offers ADD COLUMN ' + column + ' ' + definition).run(); } catch (e) { const columns = (await db.prepare('PRAGMA table_info(private_offers)').all()).results || []; if (!columns.some(x => x.name === column)) throw e; } }
+  }
+  await db.batch([
+    db.prepare(`CREATE TABLE IF NOT EXISTS private_offer_events (id TEXT PRIMARY KEY, offer_id TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS private_offer_selections (id TEXT PRIMARY KEY, offer_id TEXT NOT NULL, selection_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS private_offer_v2 (id TEXT PRIMARY KEY, version INTEGER NOT NULL, mutation_id TEXT NOT NULL, state_json TEXT NOT NULL)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS private_offer_v2_events (id TEXT PRIMARY KEY, offer_id TEXT NOT NULL, version INTEGER NOT NULL, actor TEXT NOT NULL, staff_subject TEXT, kind TEXT NOT NULL, before_json TEXT, after_json TEXT NOT NULL, detail_json TEXT NOT NULL, created_at TEXT NOT NULL)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS private_offer_v2_snapshots (id TEXT PRIMARY KEY, offer_id TEXT NOT NULL, version INTEGER NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS private_offer_v2_backups (offer_id TEXT PRIMARY KEY, legacy_json TEXT NOT NULL, events_json TEXT NOT NULL, selections_json TEXT NOT NULL, vehicle_json TEXT NOT NULL, created_at TEXT NOT NULL)`),
+    db.prepare('CREATE INDEX IF NOT EXISTS private_offer_events_offer_idx ON private_offer_events(offer_id, kind)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS private_offer_v2_events_offer_idx ON private_offer_v2_events(offer_id, version)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS private_offer_v2_snapshots_offer_idx ON private_offer_v2_snapshots(offer_id, version)')
+  ]);
 }
-const v=await env.DB.prepare("SELECT id,retail_price,offer_price,extra_json FROM vehicles WHERE id=?").bind(String(d.vehicleId||'')).first();if(!v)return json({error:"Vehicle not found"},404);const customer=String(d.customer||'').trim().slice(0,100);if(!customer)return json({error:"Enter a customer reference"},400);const days=Number(d.days);if(!allowedDays.has(days)&&days!==0&&days!==-1)return json({error:"Invalid expiry option"},400);let expires=days===-1?null:days===0?new Date(d.expiresAt):new Date(Date.now()+days*86400000);if(expires&&(!Number.isFinite(expires.getTime())||expires.getTime()<=Date.now()||expires.getTime()>Date.now()+366*86400000))return json({error:"Expiry must be in the next 366 days"},400);
-const extras=JSON.parse(v.extra_json||'{}');const defaultPrice=Number(extras.offerPrice)||Number(v.offer_price)||Number(v.retail_price);const price=Number(d.price??defaultPrice);if(!Number.isFinite(price)||price<=0||price>10000000)return json({error:"Invalid offer price"},400);const items=Array.isArray(d.items)?d.items:extras.dealItems||[];if(!Array.isArray(items)||items.length>60)return json({error:"Invalid benefits"},400);const cleaned=items.map(i=>({title:String(i.title||i.name||'').slice(0,130),type:['included','free','charged','optional','offered'].includes(String(i.type).toLowerCase())?(String(i.type).toLowerCase()==='offered'?'optional':String(i.type).toLowerCase()):'included',price:Math.max(0,Number(i.price||i.customerPrice)||0),normalValue:Math.max(0,Number(i.normalValue??i.originalPrice)||0),description:String(i.description||i.notes||'').slice(0,350)})).filter(i=>i.title);
-const id=crypto.randomUUID(),t=token();await env.DB.prepare("INSERT INTO private_offers(id,vehicle_id,customer_label,token_hash,offer_json,expires_at,share_token) VALUES(?,?,?,?,?,?,?)").bind(id,v.id,customer,await digest(t),JSON.stringify({price,items:cleaned}),expires?expires.toISOString():null,t).run();return json({ok:true,id,url:new URL('/offer/?token='+t,request.url).href,expiresAt:expires?.toISOString()||null})}catch(e){return json({error:"Could not create offer",detail:String(e.message||e).slice(0,120)},500)}}
-export async function onRequestCustomerMessage({request,env}){return json({error:"Unavailable"},404)}
-export async function onRequestPut({request,env}){if(!env.DB)return json({error:"Database unavailable"},503);try{await setup(env.DB);await migrate(env.DB);const d=await request.json();if(!/^[a-f0-9]{64}$/.test(d.token||""))return json({error:"Invalid offer link"},400);const offer=await env.DB.prepare("SELECT id,offer_json,expires_at,revoked,locked,published,selected_json FROM private_offers WHERE token_hash=?").bind(await digest(d.token)).first();if(!offer||offer.revoked||!offer.published||offer.expires_at&&Date.parse(offer.expires_at)<=Date.now())return json({error:"Offer expired or revoked"},410);if(offer.locked)return json({error:"This offer is finalised and locked"},423);if(d.action==='warrantyRequest'||d.action==='warrantyAccept'){const w=await warrantyState(env.DB,offer.id);let payload;if(d.action==='warrantyRequest'){if(![0,...warrantyMonths].includes(d.months))return json({error:'Invalid warranty period'},400);payload={months:d.months,status:d.months?'review':'none',category:w?.category||null,engine:w?.engine||'',flags:w?.flags||[],vat:!!w?.vat}}else{if(!w||w.id!==d.reviewId||w.status!=='acceptance')return json({error:'Warranty offer changed'},409);payload={...w,status:'confirmed'}}await env.DB.prepare("INSERT INTO private_offer_events(id,offer_id,actor,kind,payload) VALUES(?,?,?,?,?)").bind(crypto.randomUUID(),offer.id,'customer',d.action,JSON.stringify(payload)).run();return json({ok:true})}if(d.action==='valuationDecision'){const v=await pxState(env.DB,offer.id);if(!v||v.id!==d.valuationId||!['accepted','declined'].includes(d.status))return json({error:'Valuation changed. Refresh your offer.'},409);await env.DB.prepare("INSERT INTO private_offer_events(id,offer_id,actor,kind,payload) VALUES(?,?,?,?,?)").bind(crypto.randomUUID(),offer.id,'customer','valuationDecision',JSON.stringify({valuationId:v.id,status:d.status})).run();return json({ok:true})}if(['payment','partExchange'].includes(d.action)){let payload;if(d.action==='payment'){if(!['cash','card','finance'].includes(d.method))return json({error:'Invalid payment preference'},400);payload={method:d.method}}else{const x=d.details||{};if(!String(x.registration||'').trim()||String(x.mileage??'').trim()===''||String(x.expected??'').trim()===''||!Number.isFinite(Number(x.mileage))||!Number.isFinite(Number(x.expected))||Number(x.mileage)<0||Number(x.expected)<0)return json({error:'Registration, mileage and expected value required'},400);payload={};for(const k of ['registration','mileage','expected','make','model','keys','history','lastService','major','timing','timingWork','condition','finance','settlement'])payload[k]=String(x[k]??'').slice(0,1000)}await env.DB.prepare("INSERT INTO private_offer_events(id,offer_id,actor,kind,payload) VALUES(?,?,?,?,?)").bind(crypto.randomUUID(),offer.id,'customer',d.action,JSON.stringify(payload)).run();return json({ok:true})}if(d.action==='note'){const message=String(d.message||'').trim().slice(0,1200);if(!message)return json({error:"Enter a message"},400);await env.DB.prepare("INSERT INTO private_offer_events(id,offer_id,actor,kind,payload) VALUES(?,?,?,?,?)").bind(crypto.randomUUID(),offer.id,"customer","note",JSON.stringify({message})).run();return json({ok:true})}const data=JSON.parse(offer.offer_json),indices=d.selected;if(!Array.isArray(indices)||indices.length>60||new Set(indices).size!==indices.length||indices.some(i=>!Number.isInteger(i)||i<0||i>=data.items.length||!["optional","offered"].includes(data.items[i].type)))return json({error:"Invalid selection"},400);if(indices.filter(i=>data.items[i].title.startsWith('Extended Warranty: ')).length>1)return json({error:'Select only one extended warranty'},400);const previous=JSON.parse(offer.selected_json||"[]");const selected=indices.map(i=>({title:data.items[i].title,price:data.items[i].price,description:data.items[i].description}));const valuation=await pxState(env.DB,offer.id);const w=await warrantyState(env.DB,offer.id);const total=(w?.months?(w.status==='review'?warrantyPrices[w.category==='special'?'special':'standard'][warrantyMonths.indexOf(w.months)]*(w.vat?1.2:1):w.price):0)+(valuation?.status==='accepted'?-valuation.net:0)+Number(data.price)+data.items.filter(x=>x.type==="charged").reduce((a,x)=>a+Number(x.price),0)+selected.reduce((a,x)=>a+Number(x.price),0);const id=crypto.randomUUID();await env.DB.prepare("UPDATE private_offers SET selected_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND locked=0").bind(JSON.stringify(indices),offer.id).run();await env.DB.prepare("INSERT INTO private_offer_events(id,offer_id,actor,kind,payload) VALUES(?,?,?,?,?)").bind(crypto.randomUUID(),offer.id,"customer",d.action==="previewSelection"?"extraSelection":"selection",JSON.stringify({selected,total,added:indices.filter(i=>!previous.includes(i)).map(i=>data.items[i].title),removed:previous.filter(i=>!indices.includes(i)).map(i=>data.items[i]?.title).filter(Boolean)})).run();if(d.action!=="previewSelection")await env.DB.prepare("INSERT INTO private_offer_selections(id,offer_id,selection_json) VALUES(?,?,?)").bind(id,offer.id,JSON.stringify({selected,vehiclePrice:data.price,total})).run();return json({ok:true,reference:id.slice(0,8).toUpperCase(),total})}catch{return json({error:"Unable to submit selection"},500)}}
-export async function onRequestCustomerNote({request,env}){return json({error:"Unavailable"},404)}
-export async function onRequestPatch({request,env}){if(!await staff(request,env))return json({error:"Staff authentication required"},403);if(!env.DB)return json({error:"Database unavailable"},503);try{await setup(env.DB);await migrate(env.DB);const d=await request.json();if(!/^[a-f0-9-]{36}$/.test(d.id||''))return json({error:"Invalid offer"},400);if(d.action==='warrantyReview'){const row=await env.DB.prepare("SELECT locked,revoked FROM private_offers WHERE id=?").bind(d.id).first();const w=await warrantyState(env.DB,d.id);if(!row||row.locked||row.revoked||!w||w.id!==d.requestId||!w.months)return json({error:'Warranty request changed or locked'},409);const engine=String(d.engine||''),flags=Array.isArray(d.flags)?d.flags:[],months=Number(d.months),i=warrantyMonths.indexOf(months);if(!/^(electric|[0-8]\.[0-9])$/.test(engine)||i<0)return json({error:'Select engine and warranty period'},400);const special=engine==='electric'||Number(engine)>2.5||flags.length>0;const retail=warrantyPrices[special?'special':'standard'][i],price=Number(d.price),vat=d.vat===true;if(!Number.isFinite(price)||price<0||price>retail)return json({error:'Invalid warranty price'},400);const payload={months,engine,flags,category:special?'special':'standard',retail:Math.round(retail*(vat?1.2:1)*100)/100,price:Math.round(price*(vat?1.2:1)*100)/100,vat,status:months===w.months&&price*(vat?1.2:1)<=(w.status==='review'?warrantyPrices[w.category==='special'?'special':'standard'][i]*(w.vat?1.2:1):w.price)?'confirmed':'acceptance'};await env.DB.prepare("INSERT INTO private_offer_events(id,offer_id,actor,kind,payload) VALUES(?,?,?,?,?)").bind(crypto.randomUUID(),d.id,'dealer','warrantyReview',JSON.stringify(payload)).run()}else if(d.action==='valuation'||d.action==='partExchange'){const row=await env.DB.prepare("SELECT locked,revoked FROM private_offers WHERE id=?").bind(d.id).first();if(!row||row.revoked||row.locked)return json({error:'Offer unavailable or locked'},423);let payload;if(d.action==='valuation'){const e=await env.DB.prepare("SELECT id,payload FROM private_offer_events WHERE offer_id=? AND kind='partExchange' ORDER BY rowid DESC LIMIT 1").bind(d.id).first();const value=Number(d.value),settlement=Number(d.settlement);if(!e||e.id!==d.pxId||!Number.isFinite(value)||!Number.isFinite(settlement)||value<0||settlement<0||value>10000000||settlement>10000000||d.verified!==true)return json({error:'Confirm current PX details, valuation and settlement'},400);payload={pxId:e.id,registration:JSON.parse(e.payload).registration,value,settlement,net:Math.round((value-settlement)*100)/100,verified:true}}else{const x=d.details||{};if(!String(x.registration||'').trim()||String(x.mileage??'').trim()===''||String(x.expected??'').trim()===''||!Number.isFinite(Number(x.mileage))||!Number.isFinite(Number(x.expected))||Number(x.mileage)<0||Number(x.expected)<0)return json({error:'Registration, mileage and expected value required'},400);payload={};for(const k of ['registration','mileage','expected','make','model','keys','history','lastService','major','timing','timingWork','condition','finance','settlement'])payload[k]=String(x[k]??'').slice(0,1000)}await env.DB.prepare("INSERT INTO private_offer_events(id,offer_id,actor,kind,payload) VALUES(?,?,?,?,?)").bind(crypto.randomUUID(),d.id,'dealer',d.action,JSON.stringify(payload)).run()}else if(d.action==='customer'){const name=String(d.name||'').trim().slice(0,100),phone=String(d.phone||'').trim().slice(0,60),email=String(d.email||'').trim().slice(0,180);if(!name||email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json({error:"Invalid customer details"},400);await env.DB.prepare("UPDATE private_offers SET customer_label=?,customer_phone=?,customer_email=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND revoked=0").bind(name,phone,email,d.id).run();}else if(d.action==='vehicle'){const allowed=['title','registration','make','model','year','mileage','fuel','gearbox','description','engine','seats','doors','colour','bodyType','serviceHistory','keys','motExpiry','roadTax','previousKeepers','cambelt','lastService','lastWork','videoUrl','photoUrls'];const previous=await env.DB.prepare("SELECT vehicle_override FROM private_offers WHERE id=? AND revoked=0").bind(d.id).first();if(!previous)return json({error:"Offer not found"},404);const data=JSON.parse(previous.vehicle_override||"{}");for(const key of allowed)if(d.vehicle&&Object.hasOwn(d.vehicle,key))data[key]=String(d.vehicle[key]??'').slice(0,['description','photoUrls'].includes(key)?12000:key==='videoUrl'?2000:160);await env.DB.prepare("UPDATE private_offers SET vehicle_override=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND revoked=0").bind(JSON.stringify(data),d.id).run()}else if(d.action==='publish'||d.action==='unpublish'){await env.DB.prepare("UPDATE private_offers SET published=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND revoked=0").bind(d.action==='publish'?1:0,d.id).run()}else if(d.action==='revoke'){await env.DB.prepare("UPDATE private_offers SET revoked=1,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(d.id).run()}else if(d.action==='extend'){if(d.expiresAt===null){await env.DB.prepare("UPDATE private_offers SET expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND revoked=0").bind(d.id).run()}else{const date=new Date(d.expiresAt);if(!Number.isFinite(date.getTime())||date.getTime()<=Date.now()||date.getTime()>Date.now()+366*86400000)return json({error:"Invalid expiry"},400);await env.DB.prepare("UPDATE private_offers SET expires_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND revoked=0").bind(date.toISOString(),d.id).run()}}else if(d.action==='lock'||d.action==='unlock'){if(d.action==='lock'){const last=await env.DB.prepare("SELECT kind FROM private_offer_events WHERE offer_id=? AND kind IN ('selection','extraSelection','edit','warrantyReview','warrantyRequest','valuation','valuationDecision') ORDER BY rowid DESC LIMIT 1").bind(d.id).first();if(last&&last.kind!=='selection')return json({error:'Customer must confirm the latest package before finalising'},409);const w=await warrantyState(env.DB,d.id);if(w?.months&&w.status!=='confirmed')return json({error:'Warranty review and customer acceptance required before finalising'},409);}await env.DB.prepare("UPDATE private_offers SET locked=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND revoked=0").bind(d.action==='lock'?1:0,d.id).run();await env.DB.prepare("INSERT INTO private_offer_events(id,offer_id,actor,kind,payload) VALUES(?,?,?,?,?)").bind(crypto.randomUUID(),d.id,"dealer",d.action,"{}").run()}else if(d.action==='note'){const message=String(d.message||'').trim().slice(0,1200);if(!message)return json({error:"Enter a message"},400);const row=await env.DB.prepare("SELECT locked,revoked FROM private_offers WHERE id=?").bind(d.id).first();if(!row||row.revoked)return json({error:"Offer unavailable"},404);if(row.locked)return json({error:"Unlock the offer before adding notes"},423);await env.DB.prepare("INSERT INTO private_offer_events(id,offer_id,actor,kind,payload) VALUES(?,?,?,?,?)").bind(crypto.randomUUID(),d.id,"dealer","note",JSON.stringify({message})).run()}else if(d.action==='edit'){const row=await env.DB.prepare("SELECT offer_json,locked,selected_json FROM private_offers WHERE id=? AND revoked=0").bind(d.id).first();if(!row)return json({error:"Offer not found"},404);if(row.locked)return json({error:"Deal locked"},423);const old=JSON.parse(row.offer_json);const price=Number(d.price);if(!Number.isFinite(price)||price<=0||price>10000000)return json({error:"Invalid price"},400);if(!Array.isArray(d.items)||d.items.length>60)return json({error:"Invalid extras"},400);const items=d.items.map(x=>({title:String(x.title||"").trim().slice(0,130),type:["included","free","charged","optional"].includes(x.type)?x.type:"included",price:Math.max(0,Number(x.price)||0),normalValue:Math.max(0,Number(x.normalValue)||0),vat:x.vat===true,extraMode:["required","default","available"].includes(x.extraMode)?x.extraMode:null,description:String(x.description||"").slice(0,350)})).filter(x=>x.title);await env.DB.prepare("UPDATE private_offers SET offer_json=?,selected_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(JSON.stringify({...old,price,items,vehicleVat:typeof d.vehicleVat==='boolean'?d.vehicleVat:old.vehicleVat===true}),JSON.stringify(items.flatMap((x,i)=>{if(x.type!=='optional')return [];const j=old.items.findIndex(y=>y.title===x.title&&y.type==='optional');return (j>=0&&old.items[j].extraMode===x.extraMode?JSON.parse(row.selected_json||'[]').includes(j):x.extraMode==='default')?[i]:[]})),d.id).run();await env.DB.prepare("INSERT INTO private_offer_events(id,offer_id,actor,kind,payload) VALUES(?,?,?,?,?)").bind(crypto.randomUUID(),d.id,"dealer","edit",JSON.stringify({before:old,after:{price,items}})).run()}else return json({error:"Unknown action"},400);return json({ok:true})}catch{return json({error:"Update failed"},500)}}
-
-export async function onRequestDelete({request,env}){if(!await staff(request,env))return json({error:"Staff authentication required"},403);if(!env.DB)return json({error:"Database unavailable"},503);try{await setup(env.DB);await migrate(env.DB);const d=await request.json();if(!/^[a-f0-9-]{36}$/.test(d.id||""))return json({error:"Invalid offer"},400);await env.DB.prepare("UPDATE private_offers SET revoked=1,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(d.id).run();return json({ok:true})}catch{return json({error:"Unable to revoke offer"},500)}}
-
-export async function onRequestOptions(){return new Response(null,{status:204})}
+async function loadDeal(db, row) {
+  if (row.v2_state) return JSON.parse(row.v2_state);
+  let saved = await db.prepare('SELECT state_json FROM private_offer_v2 WHERE id=?').bind(row.id).first();
+  if (saved) return JSON.parse(saved.state_json);
+  const v = await db.prepare('SELECT * FROM vehicles WHERE id=?').bind(row.vehicle_id).first(); assert(v, 'Vehicle unavailable', 404);
+  const events = (await db.prepare('SELECT * FROM private_offer_events WHERE offer_id=? ORDER BY rowid ASC').bind(row.id).all()).results || [];
+  const selections = (await db.prepare('SELECT * FROM private_offer_selections WHERE offer_id=? ORDER BY rowid ASC').bind(row.id).all()).results || [];
+  const d = migrateLegacy(row, v, events), now = new Date().toISOString();
+  const statements = [
+    db.prepare('INSERT OR IGNORE INTO private_offer_v2_backups(offer_id,legacy_json,events_json,selections_json,vehicle_json,created_at) VALUES(?,?,?,?,?,?)').bind(row.id, JSON.stringify(Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'v2_state'))), JSON.stringify(events), JSON.stringify(selections), JSON.stringify(v), now),
+    db.prepare('INSERT OR IGNORE INTO private_offer_v2(id,version,mutation_id,state_json) VALUES(?,?,?,?)').bind(row.id, 1, id(), JSON.stringify(d))
+  ];
+  if (d.locked) {
+    const snap = {deal: clone(d), calculation: calculate(d), legacy: true};
+    statements.push(db.prepare('INSERT OR IGNORE INTO private_offer_v2_snapshots(id,offer_id,version,snapshot_json,created_at) VALUES(?,?,?,?,?)').bind(d.snapshots[0].id, row.id, 1, JSON.stringify(snap), now));
+  }
+  await db.batch(statements);
+  saved = await db.prepare('SELECT state_json FROM private_offer_v2 WHERE id=?').bind(row.id).first();
+  return JSON.parse(saved.state_json);
+}
+const active = d => !d.technical.revoked && d.technical.published && (!d.technical.expiresAt || Date.parse(d.technical.expiresAt) > Date.now());
+async function tokenRow(db, value) {
+  assert(/^[a-f0-9]{64}$/.test(value || ''), 'Offer unavailable', 404);
+  const row = await db.prepare('SELECT o.*,v.state_json AS v2_state FROM private_offers o LEFT JOIN private_offer_v2 v ON v.id=o.id WHERE o.token_hash=?').bind(await digest(value)).first(); assert(row, 'Offer unavailable', 404);
+  return row;
+}
+async function detail(db, row, d, isStaff, request) {
+  const notes = (await db.prepare("SELECT id,actor,payload,created_at FROM private_offer_events WHERE offer_id=? AND kind='note' ORDER BY rowid DESC LIMIT 200").bind(d.id).all()).results || [];
+  let snapshot = null;
+  if (d.locked && d.snapshots.length) {
+    const s = await db.prepare('SELECT snapshot_json FROM private_offer_v2_snapshots WHERE id=? AND offer_id=?').bind(d.snapshots.at(-1).id, d.id).first();
+    if (s) { snapshot = JSON.parse(s.snapshot_json); if (!isStaff) snapshot.deal = publicDeal(snapshot.deal); }
+  }
+  const result = {deal: isStaff ? d : publicDeal(d), calculation: calculate(d), notes: notes.reverse().map(n => ({id: n.id, actor: n.actor, message: safeParse(n.payload).message || '', createdAt: n.created_at})), snapshot};
+  if (isStaff) {
+    result.privateUrl = row.share_token ? new URL('/offer/?token=' + row.share_token, request.url).href : null;
+    result.finalIssues = finalIssues(d);
+    result.activity = ((await db.prepare('SELECT id,version,actor,staff_subject,kind,before_json,after_json,detail_json,created_at FROM private_offer_v2_events WHERE offer_id=? ORDER BY version DESC LIMIT 200').bind(d.id).all()).results || []).map(e => ({id: e.id, version: e.version, actor: e.actor, staff: e.staff_subject, kind: e.kind, before: safeParse(e.before_json, null), after: safeParse(e.after_json), detail: safeParse(e.detail_json), createdAt: e.created_at}));
+    result.legacyActivity = (await db.prepare('SELECT id,actor,kind,payload,created_at FROM private_offer_events WHERE offer_id=? ORDER BY rowid DESC LIMIT 200').bind(d.id).all()).results || [];
+  }
+  return result;
+}
+function compatibility(d, row, request) {
+  const c = calculate(d);
+  return {id: d.id, vehicle_id: d.vehicleId, customer_label: d.customer.name, customer_phone: d.customer.phone, customer_email: d.customer.email, published: d.technical.published ? 1 : 0, revoked: d.technical.revoked ? 1 : 0, locked: d.locked ? 1 : 0, expires_at: d.technical.expiresAt, created_at: d.createdAt, updated_at: d.updatedAt, vehicle_override: d.vehicle, selected: d.items.flatMap((x, i) => d.selectedIds.includes(x.id) ? [i] : []), offer_json: {price: c.vehicle.grossPence / 100, vehicleVat: d.pricing.vat, items: c.lines.map(x => ({...x, price: x.grossPence / 100, normalValue: x.originalGrossPence / 100, extraMode: x.selectionControl === 'available' ? null : x.selectionControl}))}, private_url: row.share_token ? new URL('/offer/?token=' + row.share_token, request.url).href : null, deal: d, calculation: c};
+}
+async function get({request, env}) {
+  assert(env.DB, 'Database unavailable', 503);
+  const url = new URL(request.url), isPublic = url.searchParams.has('token');
+  if (isPublic) assert(/^[a-f0-9]{64}$/.test(url.searchParams.get('token') || ''), 'Offer unavailable', 404);
+  const identity = isPublic ? null : await staff(request, env); assert(isPublic || identity, 'Staff authentication required', 403);
+  await setup(env.DB);
+  if (isPublic) {
+    const row = await tokenRow(env.DB, url.searchParams.get('token')), d = await loadDeal(env.DB, row);
+    assert(active(d), 'This private offer is no longer available', 410);
+    return json(await detail(env.DB, row, d, false, request));
+  }
+  if (url.searchParams.has('id')) {
+    const row = await env.DB.prepare('SELECT o.*,v.state_json AS v2_state FROM private_offers o LEFT JOIN private_offer_v2 v ON v.id=o.id WHERE o.id=?').bind(url.searchParams.get('id')).first(); assert(row, 'Offer not found', 404);
+    return json(await detail(env.DB, row, await loadDeal(env.DB, row), true, request));
+  }
+  if (url.searchParams.get('export') === 'backup') {
+    const exportData = {};
+    for (const table of ['private_offers', 'private_offer_events', 'private_offer_selections', 'private_offer_v2', 'private_offer_v2_events', 'private_offer_v2_snapshots', 'private_offer_v2_backups']) exportData[table] = (await env.DB.prepare('SELECT * FROM ' + table).all()).results || [];
+    return json({schemaVersion: 2, exportedAt: new Date().toISOString(), tables: exportData});
+  }
+  const offset = Math.max(0, Math.min(100000, Number.parseInt(url.searchParams.get('cursor') || '0', 10) || 0));
+  const rows = (await env.DB.prepare('SELECT o.*,v.state_json AS v2_state FROM private_offers o LEFT JOIN private_offer_v2 v ON v.id=o.id ORDER BY o.created_at DESC,o.id DESC LIMIT 101 OFFSET ?').bind(offset).all()).results || [];
+  const offers = []; let migrations = 0;
+  for (const row of rows.slice(0, 100)) {
+    // Bound the first migration pass to stay within the D1 free plan query budget.
+    if (!row.v2_state && migrations++ >= 4) break;
+    offers.push(compatibility(await loadDeal(env.DB, row), row, request));
+  }
+  return json({offers, nextCursor: rows.length > offers.length ? String(offset + offers.length) : null});
+}
+async function body(request) {
+  const origin = request.headers.get('Origin');
+  assert(!origin || origin === new URL(request.url).origin, 'Cross origin requests are not permitted', 403);
+  assert(request.headers.get('Sec-Fetch-Site') !== 'cross-site', 'Cross site requests are not permitted', 403);
+  assert((request.headers.get('content-type') || '').includes('application/json'), 'JSON is required', 415);
+  const raw = await request.text(); assert(raw.length <= 250000, 'Request is too large', 413);
+  let data; try { data = JSON.parse(raw); } catch { throw new DealError('Invalid JSON'); }
+  assert(data && typeof data === 'object' && !Array.isArray(data), 'Invalid request'); return data;
+}
+async function create({request, env}) {
+  const identity = await staff(request, env); assert(identity, 'Staff authentication required', 403); assert(env.DB, 'Database unavailable', 503);
+  const input = await body(request); await setup(env.DB);
+  const dealId = id(), t = randomToken(), now = new Date().toISOString();
+  let vehicleId = input.vehicleId, v, p, items;
+  const c = input.customer && typeof input.customer === 'object' ? input.customer : {name: input.customer, phone: input.phone, email: input.email};
+  const statements = [];
+  if (input.action === 'createCustomer' || input.action === 'create') {
+    vehicleId = 'vehicle_' + id(); v = input.vehicle || {registration: input.registration, make: input.make, model: input.model, mileage: input.mileage};
+    p = input.pricing;
+    if (!p) { const net = Math.round(Number(input.price) * 100); p = {originalNetPence: net, offerNetPence: net, vat: input.vehicleVat === true}; }
+    items = input.items || [];
+    const temp = freshDeal({dealId, vehicleId, customer: c, vehicle: v, pricing: p, items});
+    assert(temp.vehicle.registration && temp.vehicle.make && temp.vehicle.model, 'Registration, make and model are required');
+    const gross = calculate(temp).vehicle.grossPence / 100;
+    statements.push(env.DB.prepare('INSERT INTO vehicles(id,registration,make,model,mileage,retail_price,status,title,extra_json) VALUES(?,?,?,?,?,?,?,?,?)').bind(vehicleId, temp.vehicle.registration, temp.vehicle.make, temp.vehicle.model, Number(temp.vehicle.mileage) || 0, gross, 'draft', temp.vehicle.make + ' ' + temp.vehicle.model, JSON.stringify({customerDealOnly: true})));
+  } else {
+    const row = await env.DB.prepare('SELECT * FROM vehicles WHERE id=?').bind(String(vehicleId || '')).first(); assert(row, 'Vehicle not found', 404);
+    v = sourceVehicle(row); const extra = safeParse(row.extra_json || '{}');
+    const price = Number(input.price ?? extra.offerPrice ?? row.offer_price ?? row.retail_price);
+    p = input.pricing || {originalNetPence: Math.round(Math.max(Number(row.retail_price) || price, price) * 100), offerNetPence: Math.round(price * 100), vat: false};
+    items = (input.items || extra.dealItems || []).map(x => ({id: id(), title: x.title || x.name, description: x.description || '', type: x.type === 'offered' ? 'optional' : x.type || 'included', category: 'Other', originalNetPence: Math.round(Math.max(Number(x.normalValue ?? x.originalPrice) || 0, Number(x.price) || 0) * 100), netPence: Math.round(Number(x.price) * 100) || 0, vat: false, selectionControl: 'available'}));
+  }
+  const d = freshDeal({dealId, vehicleId, customer: c, vehicle: v, pricing: p, items}, now);
+  if (input.action !== 'createCustomer' && input.action !== 'create') {
+    const days = Number(input.days);
+    assert([-1, 0, 1, 3, 7, 30].includes(days), 'Invalid expiry option');
+    d.technical.expiresAt = days === -1 ? null : days === 0 ? new Date(input.expiresAt).toISOString() : new Date(Date.now() + days * 86400000).toISOString();
+    assert(!d.technical.expiresAt || Date.parse(d.technical.expiresAt) > Date.now(), 'Expiry must be in the future');
+    d.technical.published = true; d.stage = 'Offer Sent';
+  }
+  const compat = compatibility(d, {}, request);
+  statements.push(
+    env.DB.prepare('INSERT INTO private_offers(id,vehicle_id,customer_label,customer_phone,customer_email,token_hash,offer_json,expires_at,published,share_token,vehicle_override,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(d.id, vehicleId, d.customer.name, d.customer.phone, d.customer.email, await digest(t), JSON.stringify(compat.offer_json), d.technical.expiresAt, d.technical.published ? 1 : 0, t, JSON.stringify(d.vehicle), now, now),
+    env.DB.prepare('INSERT INTO private_offer_v2(id,version,mutation_id,state_json) VALUES(?,?,?,?)').bind(d.id, 1, id(), JSON.stringify(d)),
+    env.DB.prepare('INSERT INTO private_offer_v2_events(id,offer_id,version,actor,staff_subject,kind,before_json,after_json,detail_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(id(), d.id, 1, 'dealer', identity.subject, 'create', null, JSON.stringify(d), '{}', now)
+  );
+  await env.DB.batch(statements);
+  return json({ok: true, id: d.id, vehicleId, url: new URL('/offer/?token=' + t, request.url).href, deal: d, calculation: calculate(d)}, 201);
+}
+async function update(context, isPublic = false, revoke = false) {
+  const {request, env} = context, identity = isPublic ? null : await staff(request, env);
+  assert(isPublic || identity, 'Staff authentication required', 403); assert(env.DB, 'Database unavailable', 503);
+  const input = await body(request); await setup(env.DB);
+  const row = isPublic ? await tokenRow(env.DB, input.token) : await env.DB.prepare('SELECT o.*,v.state_json AS v2_state FROM private_offers o LEFT JOIN private_offer_v2 v ON v.id=o.id WHERE o.id=?').bind(String(input.id || '')).first(); assert(row, 'Offer not found', 404);
+  const previous = await loadDeal(env.DB, row); if (isPublic) assert(active(previous), 'This private offer is no longer available', 410);
+  if (revoke) input.action = 'revoke';
+  // The existing vehicle admin has idempotent publish/revoke controls without an editor version.
+  if (!isPublic && input.version === undefined && ['publish', 'unpublish', 'revoke'].includes(input.action)) input.version = previous.version;
+  assert(Number.isSafeInteger(input.version), 'Refresh this offer before saving. An offer version is required', 428);
+  assert(input.version === previous.version, 'This offer changed. Review the latest values before saving', 409);
+  const result = mutate(previous, input, isPublic ? 'customer' : 'dealer');
+  const d = result.deal, mutationId = id(), state = JSON.stringify(d), eventId = id(), c = calculate(d), compat = compatibility(d, row, request);
+  const statements = [
+    env.DB.prepare('UPDATE private_offer_v2 SET state_json=?,version=?,mutation_id=? WHERE id=? AND version=?').bind(state, d.version, mutationId, d.id, previous.version),
+    env.DB.prepare('INSERT INTO private_offer_v2_events(id,offer_id,version,actor,staff_subject,kind,before_json,after_json,detail_json,created_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM private_offer_v2 WHERE id=? AND mutation_id=?)').bind(eventId, d.id, d.version, isPublic ? 'customer' : 'dealer', identity?.subject || null, result.action, JSON.stringify(previous), state, JSON.stringify({packageChanged: result.packageChanged, message: result.message}), d.updatedAt, d.id, mutationId),
+    env.DB.prepare('UPDATE private_offers SET customer_label=?,customer_phone=?,customer_email=?,offer_json=?,vehicle_override=?,selected_json=?,expires_at=?,revoked=?,published=?,locked=?,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM private_offer_v2 WHERE id=? AND mutation_id=?)').bind(d.customer.name, d.customer.phone, d.customer.email, JSON.stringify(compat.offer_json), JSON.stringify(d.vehicle), JSON.stringify(compat.selected), d.technical.expiresAt, d.technical.revoked ? 1 : 0, d.technical.published ? 1 : 0, d.locked ? 1 : 0, d.updatedAt, d.id, d.id, mutationId)
+  ];
+  if (result.message) statements.push(env.DB.prepare("INSERT INTO private_offer_events(id,offer_id,actor,kind,payload,created_at) SELECT ?,?,?,'note',?,? WHERE EXISTS(SELECT 1 FROM private_offer_v2 WHERE id=? AND mutation_id=?)").bind(eventId, d.id, isPublic ? 'customer' : 'dealer', JSON.stringify({message: result.message}), d.updatedAt, d.id, mutationId));
+  if (result.action === 'confirm') statements.push(env.DB.prepare('INSERT INTO private_offer_selections(id,offer_id,selection_json,created_at) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM private_offer_v2 WHERE id=? AND mutation_id=?)').bind(eventId, d.id, JSON.stringify({packageVersion: d.packageVersion, offerVersion: d.version, selected: c.lines.filter(x => x.active).map(x => ({id: x.id, title: x.title, price: x.grossPence / 100})), vehiclePrice: c.vehicle.grossPence / 100, total: c.outstandingPence / 100}), d.updatedAt, d.id, mutationId));
+  if (result.snapshot) {
+    const s = d.snapshots.at(-1);
+    statements.push(env.DB.prepare('INSERT INTO private_offer_v2_snapshots(id,offer_id,version,snapshot_json,created_at) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM private_offer_v2 WHERE id=? AND mutation_id=?)').bind(s.id, d.id, d.version, JSON.stringify({deal: d, calculation: c}), d.updatedAt, d.id, mutationId));
+  }
+  const saved = await env.DB.batch(statements);
+  assert(saved[0].meta?.changes === 1, 'Another change arrived while saving. Review the latest offer', 409);
+  return json({ok: true, ...await detail(env.DB, row, d, !isPublic, request)});
+}
+async function guarded(fn, context) {
+  try { return await fn(context); } catch (e) { return json({error: e instanceof DealError ? e.message : 'The request could not be completed. Please try again.'}, e instanceof DealError ? e.status : 500); }
+}
+export const onRequestGet = context => guarded(get, context);
+export const onRequestPost = context => guarded(create, context);
+export const onRequestPatch = context => guarded(c => update(c), context);
+export const onRequestPut = context => guarded(c => update(c, true), context);
+export const onRequestDelete = context => guarded(c => update(c, false, true), context);
+export const onRequestOptions = () => new Response(null, {status: 204, headers});

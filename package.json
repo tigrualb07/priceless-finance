@@ -1,0 +1,13 @@
+{
+  "name": "priceless-customer-deals",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:browser": "node tests/browser.mjs",
+    "test:dom": "node --experimental-vm-modules tests/dom.mjs",
+    "test:serve": "node tests/server.mjs"
+  },
+  "devDependencies": {"jsdom": "31.0.1", "playwright": "1.62.1"},
+  "engines": {"node": ">=24"}
+}
