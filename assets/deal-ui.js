@@ -179,7 +179,7 @@ export function renderNotes(root, notes, d, admin) {
 }
 export function priceLabel(x, type) {
   const saving = x.discountPence ?? x.savingsPence;
-  return h('span', {}, x.originalGrossPence > x.grossPence && h('span', {class: 'old'}, money(x.originalGrossPence)), h('strong', {}, type === 'included' ? 'INCLUDED' : x.grossPence === 0 ? 'FREE' : money(x.grossPence)), saving > 0 && h('small', {class: 'saving'}, 'Save ' + money(saving)), x.vatPence > 0 && h('small', {}, money(x.netPence) + ' + ' + money(x.vatPence) + ' VAT'));
+  return h('span', {class: 'price-label'}, x.originalGrossPence > x.grossPence && h('span', {class: 'old'}, money(x.originalGrossPence)), h('strong', {}, type === 'included' ? 'INCLUDED' : x.grossPence === 0 ? 'FREE' : money(x.grossPence)), saving > 0 && h('small', {class: 'saving'}, 'Save ' + money(saving)), x.vatPence > 0 && h('small', {}, money(x.netPence) + ' + ' + money(x.vatPence) + ' VAT'));
 }
 export function renderCalculation(d, c) {
   const root = h('div', {}, h('h3', {}, 'Your Personalised Package'), line('Original vehicle price', h('span', {class: 'old'}, money(c.originalVehicleGrossPence))), c.vehicleDiscountPence > 0 && line('Vehicle discount', money(c.vehicleDiscountPence)), line('Personalised vehicle price', money(c.vehicle.grossPence)));
