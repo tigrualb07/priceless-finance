@@ -32,3 +32,12 @@ test('original Customer Link receives price changes without reload and preserves
   assert.deepEqual(f.row().offer_json.selectedIds,['sync_optional_01']);assert.match(ui.doc.querySelector('#total').textContent,/9,800/);
  }finally{ui?.close();f.close()}
 });
+
+test('a delayed poll response cannot restore state from before a successful edit',async()=>{
+ const f=await fixture();let ui;try{
+  ui=await originalUI(f);let release;const gate=new Promise(resolve=>release=resolve),request=f.request;let hold=true;
+  f.request=async(...args)=>{const result=await request(...args);if(hold&&args[0]==='GET'&&String(args[3]).includes('offer=')){hold=false;await gate;}return result;};
+  const pending=ui.poll();await new Promise(resolve=>setTimeout(resolve,15));ui.doc.querySelector('#editCustomer').click();ui.input(ui.doc.querySelector('#editName'),'Saved newest customer');ui.doc.querySelector('#customerEdit').dispatchEvent(new ui.w.Event('submit',{bubbles:true,cancelable:true}));await new Promise(resolve=>setTimeout(resolve,30));release();await pending;await ui.idle();
+  assert.equal(f.row().customer_label,'Saved newest customer');assert.equal(ui.doc.querySelector('#editName').value,'Saved newest customer');
+ }finally{ui?.close();f.close()}
+});
