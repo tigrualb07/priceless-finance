@@ -1,0 +1,11 @@
+{
+  "name": "priceless-finance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-vm-modules --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "31.0.1"
+  }
+}
