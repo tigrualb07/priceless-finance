@@ -18,6 +18,13 @@ body>*:not(#offerDocument){display:none!important}
 #offerDocument td:last-child,#offerDocument th:last-child{text-align:right}
 #offerDocument .financial td:nth-last-child(-n+2),#offerDocument .financial th:nth-last-child(-n+2){white-space:nowrap}
 #offerDocument tr{break-inside:avoid}
+#offerDocument .financial td:not(:first-child),#offerDocument .financial th:not(:first-child){white-space:nowrap;text-align:right}
+#offerDocument .price-breakdown td:last-child{white-space:nowrap}
+#offerDocument .price-highlight{font-weight:bold;background:#eef5eb}
+#offerDocument .saving{font-weight:bold;color:#32623c}
+#offerDocument .benefit{padding:1.5mm 0;border-bottom:1px solid #d7e4d7}
+#offerDocument .benefit span{display:block}
+#offerDocument .price-breakdown td{padding:.65mm .7mm}
 #offerDocument .document-grid{display:grid;grid-template-columns:24% 29% 1fr;gap:3mm;align-items:start;margin-top:3mm}
 #offerDocument .document-grid>section{border:1px solid #d7e4d7;border-radius:2mm;padding:2.5mm;min-width:0}
 #offerDocument .vehicle-photo{width:100%;height:35mm;object-fit:contain}
@@ -39,13 +46,25 @@ export function prepareOfferDocument(model,doc=document){
  const calculator=add(grid,'section');const table=(headers,rows,parent=calculator)=>{const t=add(parent,'table'),head=add(t,'thead'),hr=add(head,'tr');for(const h of headers)add(hr,'th',h);const body=add(t,'tbody');for(const values of rows){const tr=add(body,'tr');for(const value of values)add(tr,'td',value)}return t};
  table(['Specification','Details'],specs.filter(([,value])=>value!==null&&value!==undefined&&String(value).trim()!==''),vehicle);
  if(v.description){add(vehicle,'h2','Vehicle description');add(vehicle,'p',v.description)}
- add(calculator,'h2','Calculator');add(calculator,'p','Original vehicle price: '+money(c.originalVehiclePence));add(calculator,'p','Vehicle discount: '+money(c.vehicleDiscountPence));const rows=[['Vehicle',content.vehicleVat?'VAT included':'Gross price',money(c.vehicle.grossPence),money(c.vehicle.vatPence)]];
- for(const line of c.lines.filter(x=>x.active)){const mode=line.type==='included'?'Included':line.type==='free'?'FREE':line.extraMode==='required'?'Mandatory':line.type==='optional'||line.type==='offered'?'Optional selected':'Charged';rows.push([line.title+(line.description?'\n'+line.description:''),mode+(line.savingsPence?'\nSaving '+money(line.savingsPence):''),['included','free'].includes(line.type)?mode:money(line.grossPence),line.vat?money(line.vatPence):'']);}
- const w=content.warranty;if(w?.months)rows.push([w.months+' Months Extended Warranty · '+(w.category||'Category awaiting review'),w.status==='confirmed'?'Confirmed':w.status==='review'?'Estimate':'Awaiting customer reconfirmation',c.warrantyAmount===0?'FREE':money(Math.round(c.warrantyAmount*100)),w.vat?money(Math.round(c.warrantyAmount*100)-Math.round(c.warrantyAmount*100/1.2)):'']);
- table(['Product','Treatment','Gross','VAT'],rows).className='financial';
+ add(calculator,'h2','Vehicle Price Breakdown');
+ const vat=content.vehicleVat===true, originalNet=vat?Math.round(c.originalVehiclePence/1.2):c.originalVehiclePence;
+ const priceRows=[['Original Screen Price',money(c.originalVehiclePence)]];
+ if(vat)priceRows.push(['Net screen price',money(originalNet)],['VAT (20%)',money(c.originalVehiclePence-originalNet)]);
+ priceRows.push(['Vehicle Discount',money(c.vehicleDiscountPence)]);
+ if(vat&&c.vehicleDiscountPence)priceRows.push(['Net discount',money(originalNet-c.vehicle.netPence)],['VAT reduction',money(c.originalVehiclePence-originalNet-c.vehicle.vatPence)]);
+ priceRows.push(['Personalised Vehicle Price',money(c.vehicle.grossPence)]);
+ if(vat)priceRows.push(['Net vehicle price',money(c.vehicle.netPence)],['VAT (20%)',money(c.vehicle.vatPence)]);
+ const breakdown=table(['Description','Amount'],priceRows);breakdown.className='price-breakdown';for(const tr of breakdown.tBodies[0].rows){if(['Original Screen Price','Personalised Vehicle Price','Vehicle Discount'].includes(tr.cells[0].textContent))tr.className=tr.cells[0].textContent==='Vehicle Discount'?'saving':'price-highlight';}
+ const benefits=c.lines.filter(x=>x.active&&['included','free'].includes(x.type));
+ if(benefits.length){add(customer,'h2','Included Benefits');for(const line of benefits){const p=add(customer,'p',undefined,'benefit');add(p,'strong',line.title+' · '+(line.type==='free'?'FREE':'Included'));if(line.description)add(p,'span',line.description,'document-small');if(line.savingsPence)add(p,'span','Saving '+money(line.savingsPence),'document-small');}}
+ add(calculator,'h2','Package Calculator');const rows=[];
+ for(const line of c.lines.filter(x=>x.active&&!['included','free'].includes(x.type))){rows.push([line.title+(line.description?'\n'+line.description:'')+(line.savingsPence?'\nSaving '+money(line.savingsPence):''),money(line.netPence),line.vat?money(line.vatPence):'—',line.grossPence===0?'FREE':money(line.grossPence)]);}
+ const w=content.warranty;if(w?.months){const gross=Math.round(c.warrantyAmount*100),net=w.vat?Math.round(gross/1.2):gross;rows.push([w.months+' Months Extended Warranty · '+(w.category||'Category awaiting review')+'\n'+(w.status==='confirmed'?'Confirmed':w.status==='review'?'Estimate':'Awaiting customer reconfirmation'),money(net),w.vat?money(gross-net):'—',gross===0?'FREE':money(gross)]);}
+ if(rows.length)table(['Product','Net','VAT','Total'],rows).className='financial';
+ add(calculator,'p','Additional products: '+money(c.purchasePence-c.vehicle.grossPence));
  if(w?.months){add(calculator,'p',w.taxConfirmed?'Warranty tax treatment: '+w.taxTreatment+'. Provider: '+w.provider+'. Evidence: '+w.taxEvidence:'Warranty tax treatment requires provider evidence.','document-small');}
  const px=content.valuation;if(px){add(calculator,'h2','Part exchange');add(calculator,'p',(px.registration||'')+' · '+px.status);if(px.status==='accepted'){table(['Valuation','Settlement','Net allowance'],[[money(Math.round(px.value*100)),money(Math.round(px.settlement*100)),money(Math.round(px.net*100))]]);if(px.net<0)add(calculator,'p','Separate negative equity agreement: '+px.negativeEquityExplanation);}}
- add(calculator,'h2','Payment summary');table(['Description','Amount'],balanceLines(c).map(([label,pence])=>[label,money(pence)]));add(calculator,'p','Total savings: '+money(c.savingsPence));const total=add(calculator,'div',undefined,'document-total');add(total,'span',c.totalPence<0?'Amount overpaid':'Balance remaining');add(total,'strong',money(Math.abs(c.totalPence)));
+ add(calculator,'h2','Payment summary');table(['Description','Amount'],balanceLines(c).map(([label,pence])=>[label,money(pence)]));add(calculator,'h2','YOUR TOTAL SAVINGS: '+money(c.savingsPence));const total=add(calculator,'div',undefined,'document-total');add(total,'span',c.totalPence<0?'Amount overpaid':'Balance remaining');add(total,'strong',money(Math.abs(c.totalPence)));
  if(content.payments?.length){add(calculator,'h2','Recorded payments and refunds');table(['Date and record','Method and reference','Amount'],content.payments.map(x=>[stamp(x.receivedAt)+' UK\n'+x.kind,x.method+' · '+x.reference,money(x.amountPence)]));}
  if(final){const footer=add(root,'footer');add(footer,'p','Customer confirmed package '+final.confirmationRevision+'. Final agreement '+final.reference+'.');add(footer,'p','Agreement integrity reference: '+final.hash);}
  else add(root,'footer','Provisional offer. The saved agreement will be issued after the current package is confirmed and finalised.');
