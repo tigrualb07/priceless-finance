@@ -45,7 +45,7 @@ export function calculateOffer({price, retailPrice, vehicleVat = false, items = 
   if (valuation?.status === 'accepted' && knownPX) {
     const net = moneyPence(valuation.net);
     if (net >= 0) pxAllowancePence = net;
-    else if (valuation.negativeEquityReviewed === true && valuation.negativeEquityAgreed === true) negativeEquityPence = -net;
+    else if (valuation.negativeEquityAgreed === true) negativeEquityPence = -net;
   }
   let depositsPence = 0, additionalPaymentsPence = 0, refundsPence = 0;
   for (const payment of payments) {
@@ -69,8 +69,9 @@ export function calculateOffer({price, retailPrice, vehicleVat = false, items = 
 export function balanceLines(c){
  const rows=[['Purchase total',c.purchasePence]];
  if(c.pxAllowancePence)rows.push(['Accepted part exchange allowance',-c.pxAllowancePence]);
- if(c.negativeEquityPence)rows.push(['Separately agreed negative equity',c.negativeEquityPence]);
- if(c.depositRequestedPence)rows.push(['Deposit requested (not deducted)',c.depositRequestedPence]);
+ if(c.negativeEquityPence)rows.push(['Negative equity contribution (existing finance shortfall)',c.negativeEquityPence]);
+ if(c.depositRequestedPence)rows.push(['Vehicle deposit requested (not deducted)',c.depositRequestedPence]);
+ if(c.negativeEquityPence)rows.push(['Total customer contribution requested (not deducted)',c.depositRequestedPence+c.negativeEquityPence]);
  if(c.depositsPence)rows.push(['Deposits received',-c.depositsPence]);
  if(c.additionalPaymentsPence)rows.push(['Additional payments received',-c.additionalPaymentsPence]);
  if(c.refundsPence)rows.push(['Refunds paid',c.refundsPence]);
