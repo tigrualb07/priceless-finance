@@ -32,7 +32,7 @@ function makeBenefit(x={},target='benefitRows'){
  const normal=field('normal','Original £',el('input')),price=field('price','Offer £',el('input'));
  for(const node of [normal,price]){node.type='number';node.min='0';node.step='.01';node.required=true;}
  normal.value=(Number(x.normalValue||0)/(x.vat?1.2:1)).toFixed(2);price.value=(Number(x.price||0)/(x.vat?1.2:1)).toFixed(2);
- row.dataset.original=JSON.stringify(x);row.dataset.initialNormal=normal.value;row.dataset.initialPrice=price.value;row.dataset.initialVat=String(x.vat===true);
+ if(!x.title||Number(x.price)===Number(x.normalValue))price.value='';price.required=false;price.placeholder='Same as original';row.dataset.original=JSON.stringify(x);row.dataset.initialNormal=normal.value;row.dataset.initialPrice=price.value;row.dataset.initialVat=String(x.vat===true);
  const type=field('type','Type',el('select'));
  const types=target==='offerRows'?[['standard','STANDARD PRICE'],['discount','DISCOUNTED OFFER'],['gift','FREE']]:[['included','Included'],['free','FREE'],['charged','Charged / Discounted']];
  for(const [value,label] of types)type.append(new Option(label,value));
@@ -49,14 +49,14 @@ function makeBenefit(x={},target='benefitRows'){
   price.disabled=['included','free','gift','standard'].includes(type.value);
   discount.disabled=percent.disabled=price.disabled;
   const original=moneyPence(normal.value);
-  if(type.value==='standard')price.value=normal.value;else if(price.disabled)price.value='0.00';
+  if(type.value==='standard')price.value='';else if(price.disabled)price.value='';
   else if(source==='discount')price.value=((original-moneyPence(discount.value))/100).toFixed(2);
   else if(source==='percent')price.value=(Math.round(original*(10000-Math.round(Number(percent.value||0)*100))/10000)/100).toFixed(2);
-  const saving=original-moneyPence(price.value);
+  const effective=price.disabled&&type.value!=='standard'?0:price.value===''?original:moneyPence(price.value);const saving=original-effective;
   if(source!=='discount')discount.value=(saving/100).toFixed(2);
   if(source!=='percent')percent.value=(original?saving*100/original:0).toFixed(2);
   price.setCustomValidity(Number(price.value)<0||original>0&&moneyPence(price.value)>original?'Offer price cannot exceed original price or be negative':'');
-  if(target==='offerRows')$('offerPreview').textContent='Customer preview: '+(Number(price.value)===0?'FREE':money(grossAmount(price.value,vat.checked)))+(saving>0?' · Save '+money(grossAmount(normal.value,vat.checked)-grossAmount(price.value,vat.checked)):'');
+  if(target==='offerRows')$('offerPreview').textContent='Customer preview: '+(effective===0?'FREE':money(grossAmount(effective/100,vat.checked)))+(saving>0?' · Save '+money(grossAmount(normal.value,vat.checked)-grossAmount(effective/100,vat.checked)):'');
   calc();
  };
  for(const [name,node] of [['price',price],['normal',normal],['type',type],['vat',vat],['discount',discount],['percent',percent]])node.addEventListener('input',()=>refresh(name));
@@ -66,7 +66,7 @@ const readRows=id=>[...$(id).children].map(row=>{
  const get=name=>row.querySelector('[data-field="'+name+'"]'),original=JSON.parse(row.dataset.original||'{}'),vat=get('vat').checked,type=get('type').value;
  const sameVat=String(vat)===row.dataset.initialVat;
  const normal=sameVat&&moneyPence(get('normal').value)===moneyPence(row.dataset.initialNormal)&&original.normalValue!==undefined?original.normalValue:grossAmount(get('normal').value,vat);
- const price=['included','free','gift'].includes(type)?0:sameVat&&moneyPence(get('price').value)===moneyPence(row.dataset.initialPrice)&&original.price!==undefined?original.price:grossAmount(get('price').value,vat);
+ const price=['included','free','gift'].includes(type)?0:type==='standard'||get('price').value===''?normal:sameVat&&row.dataset.initialPrice!==''&&moneyPence(get('price').value)===moneyPence(row.dataset.initialPrice)&&original.price!==undefined?original.price:grossAmount(get('price').value,vat);
  return {id:row.dataset.itemId,title:get('title').value.trim(),normalValue:normal,price,type:id==='offerRows'||get('control').value!=='required'&&type==='charged'?'optional':type,extraMode:id==='offerRows'?null:type==='charged'?get('control').value:null,vat,description:get('description').value.trim(),protected:get('protected').checked};
 }).filter(item=>item.title);
 const standardAddons=[['12 Months MOT','included',''],['Pre Delivery Inspection (PDI)','included',''],['Service (Oil & Filter)','included',''],['Service (Oil, Oil Filter & Air Filter)','included',''],['Full Service','included',''],['Full Valet','included',''],['12 Months AA Breakdown Cover','free',''],['3 Months In House Warranty','included','Engine and gearbox cover only, subject to warranty terms. For more comprehensive parts and labour coverage, explore our extended warranty options.']];
