@@ -3,7 +3,7 @@ const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:
 async function staff(request,env){
  const cookie=request.headers.get("Cookie")||"";
  const accessCookie=cookie.split(";").map(x=>x.trim()).find(x=>x.startsWith("CF_Authorization="));
- const token=request.headers.get("Cf-Access-Jwt-Assertion")||(accessCookie?decodeURIComponent(accessCookie.slice("CF_Authorization=".length)):"");
+ let token=request.headers.get("Cf-Access-Jwt-Assertion")||"";if(!token&&accessCookie){try{token=decodeURIComponent(accessCookie.slice("CF_Authorization=".length))}catch{return false}}
  if(!token||!env.ACCESS_TEAM_DOMAIN||!env.ACCESS_AUD)return false;
  try{
  const parts=token.split(".");if(parts.length!==3)return false;
@@ -12,7 +12,7 @@ async function staff(request,env){
  if(header.alg!=="RS256"||!header.kid||payload.aud!==env.ACCESS_AUD&&!(Array.isArray(payload.aud)&&payload.aud.includes(env.ACCESS_AUD)))return false;
  const domain=String(env.ACCESS_TEAM_DOMAIN).replace(/^https?:\/\//,"").replace(/\/$/,"");
  if(!/^[a-z0-9.-]+\.cloudflareaccess\.com$/i.test(domain))return false;
- if(payload.iss!=="https://"+domain||!payload.exp||payload.exp<=Date.now()/1000)return false;
+ if(payload.iss!=="https://"+domain||!Number.isFinite(payload.exp)||payload.exp<=Date.now()/1000||payload.nbf&&payload.nbf>Date.now()/1000)return false;
  const response=await fetch("https://"+domain+"/cdn-cgi/access/certs");
  if(!response.ok)return false;
  const jwks=await response.json(),jwk=jwks.keys?.find(k=>k.kid===header.kid&&k.kty==="RSA");if(!jwk)return false;
@@ -107,7 +107,7 @@ if(d.action==='createCustomer'){
 }
 const v=await env.DB.prepare("SELECT id,retail_price,offer_price,extra_json FROM vehicles WHERE id=?").bind(String(d.vehicleId||'')).first();if(!v)return json({error:"Vehicle not found"},404);const customer=String(d.customer||'').trim().slice(0,100);if(!customer)return json({error:"Enter a customer reference"},400);const days=Number(d.days);if(!allowedDays.has(days)&&days!==0&&days!==-1)return json({error:"Invalid expiry option"},400);let expires=days===-1?null:days===0?new Date(d.expiresAt):new Date(Date.now()+days*86400000);if(expires&&(!Number.isFinite(expires.getTime())||expires.getTime()<=Date.now()||expires.getTime()>Date.now()+366*86400000))return json({error:"Expiry must be in the next 366 days"},400);
 const extras=JSON.parse(v.extra_json||'{}');const defaultPrice=Number(extras.offerPrice)||Number(v.offer_price)||Number(v.retail_price);const price=Number(d.price??defaultPrice);if(!Number.isFinite(price)||price<=0||price>10000000)return json({error:"Invalid offer price"},400);const items=Array.isArray(d.items)?d.items:extras.dealItems||[];if(!Array.isArray(items)||items.length>60)return json({error:"Invalid benefits"},400);const cleaned=normaliseProducts(items);
-const id=crypto.randomUUID(),t=token();await env.DB.prepare("INSERT INTO private_offers(id,vehicle_id,customer_label,token_hash,offer_json,expires_at,share_token) VALUES(?,?,?,?,?,?,?)").bind(id,v.id,customer,await digest(t),JSON.stringify({price,items:cleaned,selectedIds:cleaned.filter(x=>x.extraMode==='default').map(x=>x.id),productIdentityVersion:1}),expires?expires.toISOString():null,t).run();return json({ok:true,id,url:new URL('/offer/?token='+t,request.url).href,expiresAt:expires?.toISOString()||null})}catch(e){return json({error:e.status?e.message:"Could not create offer"},e.status||500)}}
+const id=crypto.randomUUID(),t=token();await env.DB.prepare("INSERT INTO private_offers(id,vehicle_id,customer_label,token_hash,offer_json,expires_at,share_token,selected_json) VALUES(?,?,?,?,?,?,?,?)").bind(id,v.id,customer,await digest(t),JSON.stringify({price,items:cleaned,selectedIds:cleaned.filter(x=>x.extraMode==='default').map(x=>x.id),productIdentityVersion:1}),expires?expires.toISOString():null,t,JSON.stringify(cleaned.flatMap((x,i)=>x.extraMode==='default'?[i]:[]))).run();return json({ok:true,id,url:new URL('/offer/?token='+t,request.url).href,expiresAt:expires?.toISOString()||null})}catch(e){return json({error:e.status?e.message:"Could not create offer"},e.status||500)}}
 export async function onRequestCustomerMessage({request,env}){return json({error:"Unavailable"},404)}
 async function paymentState(db,id){const rows=await db.prepare("SELECT id,payload,created_at FROM private_offer_events WHERE offer_id=? AND kind='paymentRecord' ORDER BY rowid ASC").bind(id).all();return (rows.results||[]).map(e=>({...JSON.parse(e.payload),id:e.id,createdAt:e.created_at}))}
 async function offerAmounts(db,row,data=JSON.parse(row.offer_json)){
