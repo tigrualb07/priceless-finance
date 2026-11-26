@@ -76,3 +76,23 @@ export function balanceLines(c){
  if(c.refundsPence)rows.push(['Refunds paid',c.refundsPence]);
  return rows;
 }
+
+// Display-only scenario; never changes the agreed balance or payment ledger.
+export function provisionalPX(c,v){
+ if(!v||!['pending','accepted'].includes(v.status)||v.net==null||v.settlement==null||v.financeExists==null||!Number.isFinite(Number(v.net))||!Number.isFinite(Number(v.settlement)))return null;
+ const adjustment=-moneyPence(v.net)+c.pxAllowancePence-c.negativeEquityPence;
+ if(v.status==='accepted'&&adjustment===0)return null;
+ return {adjustment,totalPence:c.totalPence+adjustment};
+}
+export function renderPXSummary(root,v,money){
+ const doc=root.ownerDocument;const add=(parent,tag,text,style)=>{const n=doc.createElement(tag);n.textContent=text;if(style)n.style.cssText=style;parent.append(n);return n};
+ const panel=add(root,'div','','background:#eaf1e7;border:1px solid #c6d9ca;border-radius:10px;padding:10px;margin:8px 0;');
+ add(panel,'strong','PART EXCHANGE '+(v.registration||''));
+ const tile=(label,value,bg,color,size)=>{const n=add(panel,'div','','background:'+bg+';color:'+color+';padding:8px;border-radius:7px;margin:6px 0;');add(n,'div',label,'font-size:12px;font-weight:bold');add(n,'strong',value,'display:block;font-size:'+size+';margin-top:3px')};
+ tile('PRICELESS VEHICLE VALUATION',v.value==null?'Not available':money(v.value),'#d8ebce','#193d24','24px');
+ tile('Outstanding Finance Settlement',v.settlement==null?'Not confirmed':money(v.settlement),'#fff','#193425','18px');
+ if(v.net!=null)tile(v.net<0?'NEGATIVE EQUITY':v.net>0?'POSITIVE EQUITY':'NET EQUITY',money(Math.abs(v.net)),v.net<0?'#fff0e9':'#e0efd7',v.net<0?'#a13b22':'#25643a','21px');
+ else add(panel,'small','Settlement unknown. No estimated adjustment available.');
+ add(panel,'small','Status: '+v.status+(v.status==='pending'?' · Awaiting acceptance and final verification.':''));
+ return panel;
+}
