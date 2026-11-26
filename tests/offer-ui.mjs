@@ -18,7 +18,7 @@ export async function originalUI(f,staff=true){
    const result=await f.request(method,body,staff,new URL(url,'https://example.invalid').search);return Response.json(result.data,{status:result.status});
   }finally{pending--;}
  }});
- const modules=new Map();async function load(file){if(modules.has(file))return modules.get(file);const mod=new vm.SourceTextModule(await readFile(file,'utf8'),{context,identifier:file});modules.set(file,mod);await mod.link(spec=>load(spec.startsWith('/')?path.join(root,spec):path.resolve(path.dirname(file),spec)));return mod;}
+ const modules=new Map();async function load(file){file=file.split('?')[0];if(modules.has(file))return modules.get(file);const mod=new vm.SourceTextModule(await readFile(file,'utf8'),{context,identifier:file});modules.set(file,mod);await mod.link(spec=>load(spec.startsWith('/')?path.join(root,spec):path.resolve(path.dirname(file),spec)));return mod;}
  const code=[...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m=>m[1]).join('\n');
  const mod=new vm.SourceTextModule(code,{context,identifier:path.join(root,route)});await mod.link(spec=>load(path.join(root,spec)));await mod.evaluate();
  const idle=async()=>{for(let i=0;i<100;i++){await new Promise(resolve=>setTimeout(resolve,2));if(!pending)return;}throw Error('Original UI did not finish its requests');};await idle();

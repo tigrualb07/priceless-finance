@@ -1,0 +1,8 @@
+/assets/offer-calculation.js
+  Cache-Control: no-cache, must-revalidate
+/assets/offer-print.js
+  Cache-Control: no-cache, must-revalidate
+/admin/offers/*
+  Cache-Control: no-store
+/offer/*
+  Cache-Control: no-store

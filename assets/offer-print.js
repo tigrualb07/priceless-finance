@@ -1,4 +1,4 @@
-import {balanceLines} from './offer-calculation.js';
+import {balanceLines} from './offer-calculation.js?release=20261126_final';
 
 export const OFFER_PRINT_CSS=`
 #offerDocument{display:none}
