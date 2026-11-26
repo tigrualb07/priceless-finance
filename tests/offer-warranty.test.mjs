@@ -7,7 +7,7 @@ test('warranty periods tariffs categories discounts and FREE always need reconfi
  const r=await f.patch('warrantyReview',{requestId:w.id,engine,flags,months,price:prices[index],...evidence});assert.equal(r.status,200);w=(await f.public()).data.offer.warranty;assert.equal(w.price,prices[index]);assert.equal(w.category,engine==='2.0'?'standard':'special');assert.equal(w.status,'acceptance');
  assert.equal((await f.request('PUT',{token:f.token,action:'warrantyAccept',reviewId:w.id},false)).status,200);
  }}
- let w=(await f.public()).data.offer.warranty;await f.patch('warrantyReview',{requestId:w.id,engine:'3.0',flags:[],months:24,price:0,...evidence});w=(await f.public()).data.offer.warranty;assert.equal(w.price,0);assert.equal(w.status,'acceptance');assert.equal(w.retail,1047);
+ let w=(await f.public()).data.offer.warranty;await f.patch('warrantyReview',{requestId:w.id,engine:'3.0',flags:[],months:24,price:700,...evidence});w=(await f.public()).data.offer.warranty;assert.equal(w.price,700);assert.equal(w.retail,1047);assert.equal(w.status,'acceptance');await f.patch('warrantyReview',{requestId:w.id,engine:'3.0',flags:[],months:24,price:0,...evidence});w=(await f.public()).data.offer.warranty;assert.equal(w.price,0);assert.equal(w.status,'acceptance');assert.equal(w.retail,1047);
  }finally{f.close()}});
 test('VAT and IPT cannot be marked confirmed without provider evidence',async()=>{const f=await fixture();try{
  await f.patch('publish');await f.patch('warrantyRequest',{months:6});let w=(await f.public()).data.offer.warranty;

@@ -16,7 +16,7 @@ test('legacy positional selections migrate with a backup and unchanged money tok
 test('rename reorder and repricing retain the exact selected product ID',async()=>{
  const f=await fixture();try{
   await f.patch('edit',{price:10000,items});await f.patch('publish');let list=f.row().offer_json.items;
-  assert.equal((await f.request('PUT',{token:f.token,action:'previewSelection',selectedIds:[list[1].id]},false)).status,200);
+  for(const selectedIds of [[],[list[1].id],[],[list[1].id]]){assert.equal((await f.request('PUT',{token:f.token,action:'previewSelection',selectedIds},false)).status,200);assert.equal((await f.public()).data.offer.calculation.total,selectedIds.length?10200:10000);}
   list=[{...list[1],title:'Renamed',price:190},list[0]];assert.equal((await f.patch('edit',{price:10000,items:list})).status,200);
   assert.deepEqual(f.row().offer_json.selectedIds,[list[0].id]);assert.deepEqual(f.row().selected,[0]);
   const view=await f.public();assert.equal(view.data.offer.items[0].price,190);assert.deepEqual(view.data.offer.selectedIds,[list[0].id]);
