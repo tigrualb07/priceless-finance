@@ -26,6 +26,7 @@ export async function fixture() {
   const env={DB,ACCESS_TEAM_DOMAIN:'original-tests.cloudflareaccess.com',ACCESS_AUD:'synthetic-staff'};
   const request=async(method,body,staff=true,query='')=>{
     if(body&&['PATCH','PUT','DELETE'].includes(method)&&body.revision===undefined){const r=database.prepare('SELECT revision FROM private_offers WHERE id=?').get(body.id||id);body={...body,revision:r?.revision};}
+    if(body&&method==='PUT'&&body.packageRevision===undefined){const r=database.prepare('SELECT package_revision FROM private_offers WHERE id=?').get(id);body={...body,packageRevision:r?.package_revision};}
     const previous=globalThis.fetch;
     globalThis.fetch=async url=>{if(String(url)!=='https://original-tests.cloudflareaccess.com/cdn-cgi/access/certs')throw Error('Unexpected test network request');return Response.json({keys:[identity.jwk]});};
     try {
