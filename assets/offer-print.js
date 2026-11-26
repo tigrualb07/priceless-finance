@@ -1,4 +1,4 @@
-import {balanceLines} from './offer-calculation.js?release=20261126_final';
+import {balanceLines,provisionalPX,renderPXSummary} from './offer-calculation.js?release=20261126_px';
 
 export const OFFER_PRINT_CSS=`
 #offerDocument{display:none}
@@ -63,8 +63,8 @@ export function prepareOfferDocument(model,doc=document){
  if(rows.length)table(['Product','Net','VAT','Total'],rows).className='financial';
  add(calculator,'p','Additional products: '+money(c.purchasePence-c.vehicle.grossPence));
  if(w?.months){add(calculator,'p',w.taxConfirmed?'Warranty tax treatment: '+w.taxTreatment+'. Provider: '+w.provider+'. Evidence: '+w.taxEvidence:'Warranty tax treatment requires provider evidence.','document-small');}
- const px=content.valuation;if(px){add(calculator,'h2','Part exchange');add(calculator,'p',(px.registration||'')+' · '+px.status);if(px.status==='accepted'){table(['Valuation','Settlement','Net allowance'],[[money(Math.round(px.value*100)),money(Math.round(px.settlement*100)),money(Math.round(px.net*100))]]);if(px.net<0)add(calculator,'p','Separate negative equity agreement: '+px.negativeEquityExplanation);}}
- add(calculator,'h2','Payment summary');table(['Description','Amount'],balanceLines(c).map(([label,pence])=>[label,money(pence)]));add(calculator,'h2','YOUR TOTAL SAVINGS: '+money(c.savingsPence));const total=add(calculator,'div',undefined,'document-total');add(total,'span',c.totalPence<0?'Amount overpaid':'Balance remaining');add(total,'strong',money(Math.abs(c.totalPence)));
+ const px=content.valuation;const scenario=provisionalPX(c,px);if(px)renderPXSummary(vehicle,px,n=>money(Math.round(n*100)));if(scenario){add(calculator,'p','Current balance before provisional PX: '+money(c.totalPence));add(calculator,'p','Provisional PX adjustment: '+money(scenario.adjustment));add(calculator,'p','Subject to acceptance and final verification.');}
+ add(calculator,'h2','Payment summary');table(['Description','Amount'],balanceLines(c).map(([label,pence])=>[label,money(pence)]));add(calculator,'h2','YOUR TOTAL SAVINGS: '+money(c.savingsPence));const total=add(calculator,'div',undefined,'document-total');add(total,'span',scenario?'Estimated balance including provisional PX':c.totalPence<0?'Amount overpaid':'Balance remaining');add(total,'strong',money(scenario?scenario.totalPence:Math.abs(c.totalPence)));
  if(content.payments?.length){add(calculator,'h2','Recorded payments and refunds');table(['Date and record','Method and reference','Amount'],content.payments.map(x=>[stamp(x.receivedAt)+' UK\n'+x.kind,x.method+' · '+x.reference,money(x.amountPence)]));}
  if(final){const footer=add(root,'footer');add(footer,'p','Customer confirmed package '+final.confirmationRevision+'. Final agreement '+final.reference+'.');add(footer,'p','Agreement integrity reference: '+final.hash);}
  else add(root,'footer','Provisional offer. The saved agreement will be issued after the current package is confirmed and finalised.');
