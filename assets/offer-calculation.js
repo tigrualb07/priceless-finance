@@ -64,3 +64,15 @@ export function calculateOffer({price, retailPrice, vehicleVat = false, items = 
     pxAllowancePence, negativeEquityPence, depositsPence, additionalPaymentsPence, refundsPence, receivedPence,
     depositRequestedPence: moneyPence(depositRequested), totalPence};
 }
+
+// Shared payment summary labels and amounts for the existing Admin, Link and print views.
+export function balanceLines(c){
+ const rows=[['Purchase total',c.purchasePence]];
+ if(c.pxAllowancePence)rows.push(['Accepted part exchange allowance',-c.pxAllowancePence]);
+ if(c.negativeEquityPence)rows.push(['Separately agreed negative equity',c.negativeEquityPence]);
+ if(c.depositRequestedPence)rows.push(['Deposit requested (not deducted)',c.depositRequestedPence]);
+ if(c.depositsPence)rows.push(['Deposits received',-c.depositsPence]);
+ if(c.additionalPaymentsPence)rows.push(['Additional payments received',-c.additionalPaymentsPence]);
+ if(c.refundsPence)rows.push(['Refunds paid',c.refundsPence]);
+ return rows;
+}
