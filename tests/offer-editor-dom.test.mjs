@@ -6,7 +6,7 @@ import {originalUI} from './offer-ui.mjs';
 test('existing product editor preserves a gross price that does not round trip through net',async()=>{
  const f=await fixture();let ui;try{
   await f.patch('edit',{price:10000,items:[{id:'existing_penny_item',title:'Penny item',type:'charged',price:0.03,normalValue:0.03,vat:true}]});
-  ui=await originalUI(f);ui.doc.querySelector('#benefitView button').click();
+  ui=await originalUI(f);[...ui.doc.querySelectorAll('#benefitView button')].find(x=>x.textContent==='Edit').click();
   ui.input(ui.doc.querySelector('[data-field=description]'),'Description changed only');
   ui.doc.querySelector('#benefitsEdit').dispatchEvent(new ui.w.Event('submit',{bubbles:true,cancelable:true}));await ui.idle();
   assert.equal(f.row().offer_json.items[0].price,0.03);assert.equal(f.row().offer_json.items[0].normalValue,0.03);
@@ -16,7 +16,7 @@ test('existing product editor preserves a gross price that does not round trip t
 test('existing product editor supports net discount amount, percentage and individual VAT',async()=>{
  const f=await fixture();let ui;try{
   await f.patch('edit',{price:10000,items:[{id:'existing_discount_item',title:'Discount item',type:'charged',price:150,normalValue:200,vat:false}]});
-  ui=await originalUI(f);ui.doc.querySelector('#benefitView button').click();
+  ui=await originalUI(f);[...ui.doc.querySelectorAll('#benefitView button')].find(x=>x.textContent==='Edit').click();
   const field=name=>ui.doc.querySelector('[data-field='+name+']');
   ui.input(field('discount'),'25');assert.equal(field('price').value,'175.00');
   ui.input(field('percent'),'40');assert.equal(field('price').value,'120.00');
