@@ -10,10 +10,11 @@ export async function originalUI(f,staff=true){
  const url='https://example.invalid/'+(staff?'admin/offers/?deal='+f.id:'offer/?token='+f.token);
  const dom=new JSDOM(html,{url,pretendToBeVisual:true}),w=dom.window,intervals=[];let pending=0;
  w.scrollTo=()=>{};w.HTMLElement.prototype.scrollIntoView=()=>{};w.HTMLDialogElement.prototype.showModal=function(){this.open=true};w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'))};
- const context=vm.createContext({window:w,document:w.document,location:w.location,history:w.history,navigator:w.navigator,sessionStorage:w.sessionStorage,Option:w.Option,FormData:w.FormData,URL,URLSearchParams,Intl,Date,crypto,console,confirm:()=>true,alert:()=>{},setTimeout,clearTimeout,setInterval:fn=>{intervals.push(fn);return intervals.length},clearInterval:()=>{},fetch:async(url,options={})=>{
+ const context=vm.createContext({window:w,document:w.document,location:w.location,history:w.history,navigator:w.navigator,sessionStorage:w.sessionStorage,Option:w.Option,FormData:w.FormData,URL,URLSearchParams,Intl,Date,crypto,structuredClone,console,confirm:()=>true,alert:()=>{},setTimeout,clearTimeout,setInterval:fn=>{intervals.push(fn);return intervals.length},clearInterval:()=>{},fetch:async(url,options={})=>{
   pending++;try{
    if(String(url).startsWith('/api/vehicles'))return Response.json({vehicles:f.database.prepare('SELECT * FROM vehicles').all().map(v=>({...v,price:v.retail_price,fuel:v.fuel_type,gearbox:v.transmission}))});
    const method=options.method||'GET',body=options.body?JSON.parse(options.body):undefined;
+   if(body&&['PUT','PATCH'].includes(method)&&body.revision===undefined)body.revision=null;
    const result=await f.request(method,body,staff,new URL(url,'https://example.invalid').search);return Response.json(result.data,{status:result.status});
   }finally{pending--;}
  }});

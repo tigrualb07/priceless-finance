@@ -25,6 +25,7 @@ export async function fixture() {
   const DB = {prepare: sql => new Statement(sql), batch: async statements => {database.exec('BEGIN');try{const out=[];for(const s of statements)out.push(await s.run());database.exec('COMMIT');return out;}catch(error){database.exec('ROLLBACK');throw error;}}};
   const env={DB,ACCESS_TEAM_DOMAIN:'original-tests.cloudflareaccess.com',ACCESS_AUD:'synthetic-staff'};
   const request=async(method,body,staff=true,query='')=>{
+    if(body&&['PATCH','PUT','DELETE'].includes(method)&&body.revision===undefined){const r=database.prepare('SELECT revision FROM private_offers WHERE id=?').get(body.id||id);body={...body,revision:r?.revision};}
     const previous=globalThis.fetch;
     globalThis.fetch=async url=>{if(String(url)!=='https://original-tests.cloudflareaccess.com/cdn-cgi/access/certs')throw Error('Unexpected test network request');return Response.json({keys:[identity.jwk]});};
     try {
