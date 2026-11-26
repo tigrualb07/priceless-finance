@@ -7,6 +7,6 @@ test('vehicle fields media description and blank-field hiding work without movin
  }finally{ui?.close();f.close()}});
 test('changing engine invalidates the existing warranty review and confirmation',async()=>{const f=await fixture();try{
  await f.patch('publish');await f.request('PUT',{token:f.token,action:'warrantyRequest',months:12},false);let w=(await f.public()).data.offer.warranty;
- await f.patch('warrantyReview',{requestId:w.id,engine:'2.0',months:12,flags:[],price:498,vat:false});assert.equal((await f.public()).data.offer.warranty.status,'confirmed');
+ await f.patch('warrantyReview',{requestId:w.id,engine:'2.0',months:12,flags:[],price:498,vat:false,taxTreatment:'noVat',provider:'Demo provider',taxEvidence:'Synthetic provider quote for test only',taxConfirmed:true,eligibilityConfirmed:true});w=(await f.public()).data.offer.warranty;assert.equal(w.status,'acceptance');await f.request('PUT',{token:f.token,action:'warrantyAccept',reviewId:w.id},false);
  await f.patch('vehicle',{vehicle:{engine:'3.0'}});w=(await f.public()).data.offer.warranty;assert.equal(w.status,'review');assert.equal(w.engine,'3.0');assert.equal(w.category,'special');assert.equal(w.taxConfirmed,false);
  }finally{f.close()}});
