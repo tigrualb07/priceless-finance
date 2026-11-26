@@ -1,4 +1,4 @@
-import {balanceLines,provisionalPX,renderPXSummary} from './offer-calculation.js?release=20261126_px';
+import {balanceLines,provisionalPX,renderPXSummary} from './offer-calculation.js?release=20261126_contribution';
 
 export const OFFER_PRINT_CSS=`
 #offerDocument{display:none}
