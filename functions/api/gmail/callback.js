@@ -54,6 +54,9 @@ export async function onRequestPost({request,env:e}){
  const d=await request.json();if(!/^[a-f0-9-]{36}$/.test(d.id||''))return reply({error:'Invalid deal'},400);
  const row=await e.DB.prepare('SELECT * FROM private_offers WHERE id=?').bind(d.id).first();
  if(!row||!row.published||row.revoked||!row.share_token||Date.parse(row.expires_at)<=Date.now())return reply({error:'Publish an active customer link first'},400);
+ await e.DB.prepare('CREATE TABLE IF NOT EXISTS gmail_sent (deal_id TEXT PRIMARY KEY, recipient TEXT NOT NULL, sent_at TEXT NOT NULL)').run();
+ const last=await e.DB.prepare('SELECT recipient,sent_at FROM gmail_sent WHERE deal_id=?').bind(d.id).first();
+ if(d.action==='status')return reply({last});
  const email=String(row.customer_email||'').trim();if(!/^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/.test(email))return reply({error:'Save a valid customer email first'},400);
  await setup(e);const saved=await e.DB.prepare('SELECT secret FROM gmail_connection WHERE id=1').first();
  if(!saved||d.action==='connect'){
@@ -63,16 +66,23 @@ export async function onRequestPost({request,env:e}){
  return new Response(JSON.stringify({authorize:url.href}),{headers:{'Content-Type':'application/json','Cache-Control':'no-store','Set-Cookie':'pf_gmail_state='+cookie+'; Path=/api/gmail/callback; Max-Age=600; Secure; HttpOnly; SameSite=Lax'}});
  }
  const link='https://pricelessfinance.co.uk/offer/?token='+row.share_token;
- const body='Hi '+row.customer_label+',\r\n\r\nYour personalised vehicle offer is ready. Please use your private link below to view your offer.\r\n\r\n'+link+'\r\n\r\nKind regards,\r\nPriceless Auto Services Ltd';
- const html='<div style="font-family:Arial,sans-serif;color:#222;background:#fff;font-size:14px">'+escapeHtml(body).replace(/\r\n/g,'<br>').replace(escapeHtml(link),'<a href="'+escapeHtml(link)+'">'+escapeHtml(link)+'</a>')+'<br><br>'+signature+'</div>';
- if(d.action!=='send')return reply({email,body,html,signature});
+ const vehicle=await e.DB.prepare('SELECT * FROM vehicles WHERE id=?').bind(row.vehicle_id).first()||{};
+ const v={...vehicle,...JSON.parse(row.vehicle_override||'{}')};
+ const clean=x=>String(x||'').replace(/[\r\n\x00-\x1f]/g,' ').trim();
+ const model=[clean(v.make),clean(v.model)].filter(Boolean).join(' ')||clean(v.title)||'your vehicle';
+ const reg=clean(v.registration);
+ const subject='Your personalised vehicle offer | '+model+(reg?' | '+reg:'');
+ const body='Hi '+row.customer_label+',\r\n\r\nThank you for choosing Priceless Auto Services.\r\n\r\nYour personalised offer for '+model+(reg?' ('+reg+')':'')+' is now ready to view.\r\n\r\nPlease click the button below to review your vehicle details, personalised pricing and available options.\r\n\r\n'+link+'\r\n\r\nIf you have any questions, please do not hesitate to contact us.\r\n\r\nKind regards,\r\nPriceless Auto Services Ltd';
+ const html='<div style="font-family:Arial,sans-serif;color:#222;background:#fff;font-size:14px">'+escapeHtml(body).replace(/\r\n/g,'<br>').replace(escapeHtml(link),'<a style="display:inline-block;background:#b6df87;color:#102c20;padding:14px 22px;border-radius:8px;font-weight:bold;text-decoration:none" href="'+escapeHtml(link)+'">View Your Personalised Offer</a>')+'<br><br>'+signature+'</div>';
+ if(d.action!=='send')return reply({email,body,html,signature,subject,last});
  const includeSignature=d.includeSignature!==false;
  const emailHtml=includeSignature?html:html.replace(signature,'');
  if(d.email!==email||d.body!==body)return reply({error:'Offer or recipient changed. Preview again.'},409);
  let t;try{t=await exchange(e,{refresh_token:await open(e,saved.secret),grant_type:'refresh_token'})}catch{return reply({error:'Gmail authorization expired. Reconnect Gmail.',reconnect:true},401)}
- const mime='From: Priceless Auto Services Ltd <'+sender+'>\r\nTo: '+email+'\r\nReply-To: '+sender+'\r\nSubject: Your personalised Priceless vehicle offer\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n'+bytes64(enc.encode(emailHtml)).match(/.{1,76}/g).join('\r\n');
+ const mime='From: Priceless Auto Services Ltd <'+sender+'>\r\nTo: '+email+'\r\nReply-To: '+sender+'\r\nSubject: =?UTF-8?B?'+bytes64(enc.encode(subject))+'?=\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n'+bytes64(enc.encode(emailHtml)).match(/.{1,76}/g).join('\r\n');
  const sent=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{method:'POST',headers:{Authorization:'Bearer '+t.access_token,'Content-Type':'application/json'},body:JSON.stringify({raw:b64(enc.encode(mime))})});
  if(!sent.ok){const failure=await sent.json().catch(()=>({}));const reason=String(failure.error?.status||'UNKNOWN').replace(/[^A-Z_]/g,'');const detail=(failure.error?.details||[]).map(x=>String(x.reason||'').replace(/[^A-Z_]/g,'')).filter(Boolean).join(', ')|| (failure.error?.errors||[]).map(x=>String(x.reason||'').replace(/[^a-zA-Z_]/g,'')).filter(Boolean).join(', ');if(detail.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT')||detail.includes('insufficientPermissions'))return reply({sent:false,reconnect:true,error:'Gmail send permission missing. Reconnect Gmail and grant permission to send email.'},403);return reply({sent:false,error:'Gmail rejected the email (HTTP '+sent.status+', '+reason+(detail?', '+detail:'')+'). Check Gmail before retrying.'},422)}
- return reply({sent:true});
+ const sentAt=new Date().toISOString();let recorded=true;try{await e.DB.prepare('INSERT INTO gmail_sent(deal_id,recipient,sent_at) VALUES(?,?,?) ON CONFLICT(deal_id) DO UPDATE SET recipient=excluded.recipient,sent_at=excluded.sent_at').bind(d.id,email,sentAt).run()}catch{recorded=false}
+ return reply({sent:true,last:{recipient:email,sent_at:sentAt},recorded});
  }catch(err){return reply({error:'Gmail operation failed ('+(err instanceof RangeError?'message encoding':err instanceof TypeError?'network or processing':'server processing')+'). Check Gmail before retrying.'},422)}
 }
