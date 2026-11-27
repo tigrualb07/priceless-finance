@@ -22,7 +22,8 @@ async function staff(request,env){
 
 const reply=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
 const enc=new TextEncoder(),dec=new TextDecoder();
-const b64=a=>btoa(String.fromCharCode(...a)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const bytes64=a=>{let str='';for(let i=0;i<a.length;i+=8192)str+=String.fromCharCode(...a.subarray(i,i+8192));return btoa(str)};
+const b64=a=>bytes64(a).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 const un64=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
 const random=()=>b64(crypto.getRandomValues(new Uint8Array(32)));
 const key=async e=>crypto.subtle.importKey('raw',await crypto.subtle.digest('SHA-256',enc.encode(e.GMAIL_CLIENT_SECRET)), 'AES-GCM',false,['encrypt','decrypt']);
@@ -68,9 +69,9 @@ export async function onRequestPost({request,env:e}){
  const emailHtml=includeSignature?html:html.replace(signature,'');
  if(d.email!==email||d.body!==body)return reply({error:'Offer or recipient changed. Preview again.'},409);
  let t;try{t=await exchange(e,{refresh_token:await open(e,saved.secret),grant_type:'refresh_token'})}catch{return reply({error:'Gmail authorization expired. Reconnect Gmail.',reconnect:true},401)}
- const mime='From: Priceless Auto Services Ltd <'+sender+'>\r\nTo: '+email+'\r\nReply-To: '+sender+'\r\nSubject: Your personalised Priceless vehicle offer\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n'+btoa(String.fromCharCode(...enc.encode(emailHtml))).match(/.{1,76}/g).join('\r\n');
+ const mime='From: Priceless Auto Services Ltd <'+sender+'>\r\nTo: '+email+'\r\nReply-To: '+sender+'\r\nSubject: Your personalised Priceless vehicle offer\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n'+bytes64(enc.encode(emailHtml)).match(/.{1,76}/g).join('\r\n');
  const sent=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{method:'POST',headers:{Authorization:'Bearer '+t.access_token,'Content-Type':'application/json'},body:JSON.stringify({raw:b64(enc.encode(mime))})});
- if(!sent.ok)return reply({error:'Gmail did not confirm sending. Check Gmail before retrying.'},502);
+ if(!sent.ok){const failure=await sent.json().catch(()=>({}));const reason=String(failure.error?.status||'UNKNOWN').replace(/[^A-Z_]/g,'');return reply({error:'Gmail rejected the email (HTTP '+sent.status+', '+reason+'). Check Gmail before retrying.'},502)}
  return reply({sent:true});
- }catch{return reply({error:'Gmail operation failed. Check Gmail before retrying.'},500)}
+ }catch(err){return reply({error:'Gmail operation failed ('+(err instanceof RangeError?'message encoding':err instanceof TypeError?'network or processing':'server processing')+'). Check Gmail before retrying.'},500)}
 }
