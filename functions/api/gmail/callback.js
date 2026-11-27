@@ -71,7 +71,7 @@ export async function onRequestPost({request,env:e}){
  let t;try{t=await exchange(e,{refresh_token:await open(e,saved.secret),grant_type:'refresh_token'})}catch{return reply({error:'Gmail authorization expired. Reconnect Gmail.',reconnect:true},401)}
  const mime='From: Priceless Auto Services Ltd <'+sender+'>\r\nTo: '+email+'\r\nReply-To: '+sender+'\r\nSubject: Your personalised Priceless vehicle offer\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n'+bytes64(enc.encode(emailHtml)).match(/.{1,76}/g).join('\r\n');
  const sent=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{method:'POST',headers:{Authorization:'Bearer '+t.access_token,'Content-Type':'application/json'},body:JSON.stringify({raw:b64(enc.encode(mime))})});
- if(!sent.ok){const failure=await sent.json().catch(()=>({}));const reason=String(failure.error?.status||'UNKNOWN').replace(/[^A-Z_]/g,'');return reply({error:'Gmail rejected the email (HTTP '+sent.status+', '+reason+'). Check Gmail before retrying.'},502)}
+ if(!sent.ok){const failure=await sent.json().catch(()=>({}));const reason=String(failure.error?.status||'UNKNOWN').replace(/[^A-Z_]/g,'');return reply({sent:false,error:'Gmail rejected the email (HTTP '+sent.status+', '+reason+'). Check Gmail before retrying.'},422)}
  return reply({sent:true});
- }catch(err){return reply({error:'Gmail operation failed ('+(err instanceof RangeError?'message encoding':err instanceof TypeError?'network or processing':'server processing')+'). Check Gmail before retrying.'},500)}
+ }catch(err){return reply({error:'Gmail operation failed ('+(err instanceof RangeError?'message encoding':err instanceof TypeError?'network or processing':'server processing')+'). Check Gmail before retrying.'},422)}
 }
